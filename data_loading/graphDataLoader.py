@@ -30,6 +30,7 @@ class GraphDataLoader(DataLoader):
         exclude_keys (Optional[List[str]]): A list of strings specifying which
             attributes of the data object should not be batched together. If None,
             the default behavior is used.
+        jet_idx (Optional(int)): An integer to filter for the leading(0) subleading(1) or subsubleading(2) jet of the data
         **kwargs: Additional keyword arguments to be passed to the DataLoader.
 
     Returns:
@@ -46,6 +47,7 @@ class GraphDataLoader(DataLoader):
             follow_batch: Optional[List[str]] = None,
             exclude_keys: Optional[List[str]] = None,
             device: torch.device=None,
+            jet_idx: int = None,
             **kwargs,
     ):
         self.dataset_paths = dataset_paths
@@ -54,6 +56,7 @@ class GraphDataLoader(DataLoader):
         if self.window_to_load is None:
             self.window_to_load = [[0., 1.] for _ in dataset_paths]
         self.device = device
+        self.jet_idx = jet_idx
 
         datasets = []
         weights = []
@@ -68,6 +71,8 @@ class GraphDataLoader(DataLoader):
             if self.device is not None:
                 data.data.to(self.device)
             data = data[int(self.window_to_load[i][0]*len(data)):int(self.window_to_load[i][1]*len(data))]
+            if self.jet_idx is not None:
+                data = data[data.Jet_idx == self.jet_idx]
             weights.append(data.w)
             if dataset_fraction is not None:
                 weights[i] = weights[i]*dataset_fraction[i]/np.sum(dataset_fraction)/weights[i].sum()
