@@ -3,6 +3,7 @@ from torch_geometric.loader import DataLoader
 from typing import Optional, List
 from utils.LundTreeUtilities import OnTheFlyNormalizer
 from torch.utils.data import ConcatDataset, WeightedRandomSampler
+import numpy as np
 import os
 import torch
 
@@ -21,6 +22,7 @@ class GraphDataLoader(DataLoader):
             contains the start and end of the window to be loaded. If None, the
             entire dataset is loaded.
         batch_size (int): The batch size to be used.
+        dataset_fraction (List[float]): List of weights in order to have balanced datasets.
         shuffle (bool): Whether to shuffle the data.
         follow_batch (Optional[List[str]]): A list of strings specifying which
             attributes of the data object should be batched together. If None,
@@ -39,10 +41,11 @@ class GraphDataLoader(DataLoader):
             normalizer: OnTheFlyNormalizer=None,
             window_to_load: List[List[float]]=None,
             batch_size: int=1,
+            dataset_fraction: List[float]=None,
             shuffle: bool = False,
             follow_batch: Optional[List[str]] = None,
             exclude_keys: Optional[List[str]] = None,
-            device=None,
+            device: torch.device=None,
             **kwargs,
     ):
         self.dataset_paths = dataset_paths
@@ -66,6 +69,8 @@ class GraphDataLoader(DataLoader):
                 data.data.to(self.device)
             data = data[int(self.window_to_load[i][0]*len(data)):int(self.window_to_load[i][1]*len(data))]
             weights.append(data.w)
+            if dataset_fraction is not None:
+                weights[i] = weights[i]*dataset_fraction[i]/np.sum(dataset_fraction)/weights[i].sum()
             if normalizer is not None:
                 normalizer(data.data)
 
