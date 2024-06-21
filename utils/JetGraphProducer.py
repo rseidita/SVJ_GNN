@@ -644,6 +644,7 @@ class JetGraphProducer(InMemoryDataset):
                         n_lund_vars=self.n_lund_vars,
                         save_4vectors=self.save_4vectors_in_lund_tree,
                         fractions=energy_fractions,
+                        save_fractions=self.save_energy_fractions,
                         )
 
                     feature_matrix, adjacency_matrix = ret
