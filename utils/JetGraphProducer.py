@@ -703,7 +703,10 @@ class JetGraphProducer(InMemoryDataset):
                 for obs in self.extra_obs_to_save_per_jet:
                     graph[obs] = torch.tensor([event[obs][nj]], dtype=torch.float)
                 for obs in self.extra_obs_to_save_per_event:
-                    graph[obs] = torch.tensor([event[obs]], dtype=torch.float)
+                    if obs == "event":
+                        graph[obs] = torch.tensor([event[obs]], dtype=torch.int)
+                    else:
+                        graph[obs] = torch.tensor([event[obs]], dtype=torch.float)
                 for obs in self.extra_obs_to_compute_per_event:
                     graph[obs.__name__] = torch.tensor([obs(event)], dtype=torch.float)
                         
