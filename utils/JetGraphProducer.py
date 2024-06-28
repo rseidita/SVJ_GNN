@@ -73,6 +73,7 @@ def get_lund_decomp(
         save_fractions:bool=False,
         n_lund_vars:int=3,
         save_4vectors:bool=False,
+        directed:bool=False
         ):
     """
     Perform jet declustering, returning the Lund tree as a nested list
@@ -87,6 +88,7 @@ def get_lund_decomp(
         save_fractions (bool): whether to save the energy fractions of the constituents in the Lund tree
         n_lund_vars (int): number of Lund variables to use (3 or 5)
         save_constituents_4vectors (bool): whether to save the 4-vectors of the constituents in the Lund tree
+        directed (bool): whether the edges are directed (information flow from child to parent)
 
     Returns:   
         tuple[list, list]: nodes (feature matrix), edges (sparse adjacency matrix)
@@ -203,18 +205,32 @@ def get_lund_decomp(
         # This construction ensures that each clustered step is
         # two-way connected to its mother constituents
         if first_clustering:
-            edges = np.array([
-                [index_list[i], index_list[j], k, k],
-                [k, k, index_list[i], index_list[j]]
-            ], dtype=np.int64
-            )
+            if not directed:
+                edges = np.array([
+                    [index_list[i], index_list[j], k, k],
+                    [k, k, index_list[i], index_list[j]]
+                ], dtype=np.int64
+                )
+            else:
+                edges = np.array([
+                    [index_list[i], index_list[j]],
+                    [k, k],
+                ], dtype=np.int64
+                )
             first_clustering = False
         else:
-            new_edges = np.array([
-                [index_list[i], index_list[j], k, k],
-                [k, k, index_list[i], index_list[j]]
-            ], dtype=np.int64
-            )
+            if not directed:
+                new_edges = np.array([
+                    [index_list[i], index_list[j], k, k],
+                    [k, k, index_list[i], index_list[j]]
+                ], dtype=np.int64
+                )
+            else:
+                new_edges = np.array([
+                    [index_list[i], index_list[j]],
+                    [k, k],
+                ], dtype=np.int64
+                )
             edges = np.hstack((edges, new_edges))
 
         # Update the index map
@@ -361,6 +377,7 @@ class JetGraphProducer(InMemoryDataset):
     
     Args:
         root (str): Path to the folder with (one or more) root files containing the jet constituents. All files in the folder will be processed and treated as one sample.
+        output_dataset_name (str): Name of the output dataset
         n_store_jets (int): Number of jets to store per event
         delta_r_threshold (float): Threshold for the deltaR distance between constituents to be considered connected (spacial graphs only)
         n_store_cands (int): Number of constituents to store per jet (spacial graphs only)
@@ -379,17 +396,17 @@ class JetGraphProducer(InMemoryDataset):
         n_lund_vars (int): Number of Lund variables to use (3 or 5)
         save_4vectors_in_lund_tree (bool): Whether to save the 4-vectors of the constituents in the Lund tree
         kt_cut (float): kt cut to prune the tree (if None, no pruning is performed)
-        extra_label (str): Extra label to add to the processed file name)
         weights (str): What event weights to use (None, 'xsec') (TODO: implement pt flattening)
         extra_obs_to_save_per_jet (list): List of extra jet-level observables to store in the graph (must be available in the root file)
         extra_obs_to_save_per_event (list): List of extra event-level observables to store in the graph (must be available in the root file)
         extra_obs_to_compute_per_event (list): List of extra event-level observables to compute and store in the graph (callable functions that take the event as input and return a float)
-        extra_obs_to_load (list): List of extra observables to load from the root file (must be available in the root file)
+        extra_obs_to_load (list): List of extra observables to load from the root file needed to compute extra on-the-fly quantities (must be available in the root file)
         mask (ak.Array): Mask to apply to the root file
         label (float): Label to add to the graph for supervised learning
         verbose (bool): Whether to print progress bars
         input_format (str): Format of the input root files ["PFNanoAOD", "TreeMaker2"]
         jet_collection (str): Name of the jet collection in the root file (default: "FatJet")
+        directed (bool): Whether the edges are directed (default: False)
     """
 
     def __init__(
@@ -425,6 +442,7 @@ class JetGraphProducer(InMemoryDataset):
         verbose=False,
         input_format="PFNanoAOD",
         jet_collection="FatJet",
+        directed=False,
     ):
 
         self.root = root
@@ -456,6 +474,7 @@ class JetGraphProducer(InMemoryDataset):
         self.verbose = verbose
         self.input_format = input_format
         self.jet_collection = jet_collection
+        self.directed = directed
 
         assert self.weights in ["xsec", None], "Only xsec and None are supported for the weights argument (more to be added later)"
 
@@ -469,6 +488,10 @@ class JetGraphProducer(InMemoryDataset):
         
         else:
             assert kt_cut is None, "kt_cut is only supported for Lund tree representations"
+            assert save_4vectors_in_lund_tree == False, "save_4vectors_in_lund_tree is only supported for Lund tree representations"
+            assert save_energy_fractions == False, "save_energy_fractions is only supported for Lund tree representations"
+            assert n_lund_vars in [3, 5], "Only 3 or 5 Lund variables are supported"
+            assert directed == False, "Directed graphs are only supported for Lund tree representations"
 
         # If xsec weighs are requested but the number of events is hard capped, warn that an appoximation is used
         if self.weights == "xsec" and self.max_events_to_process:
@@ -645,6 +668,7 @@ class JetGraphProducer(InMemoryDataset):
                         save_4vectors=self.save_4vectors_in_lund_tree,
                         fractions=energy_fractions,
                         save_fractions=self.save_energy_fractions,
+                        directed=self.directed,
                         )
 
                     feature_matrix, adjacency_matrix = ret
@@ -731,7 +755,6 @@ class JetGraphProducer(InMemoryDataset):
                 "FatJetPFCands_jetIdx",
                 "FatJetPFCands_pFCandsIdx",
                 "nFatJet",
-                #"genWeight",
                 "FatJet_eta",
                 "FatJet_phi",
                 "FatJet_pt",
