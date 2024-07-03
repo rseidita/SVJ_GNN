@@ -13,6 +13,7 @@ import argparse
 import numpy as np
 import os
 import uproot
+import time
 
 
 def main(name, model_type):
@@ -25,6 +26,7 @@ def main(name, model_type):
 
     """
 
+    start = time.time()
 
     base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ/"
     base_directory_QCD = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/QCD/"
@@ -58,8 +60,8 @@ def main(name, model_type):
     model.eval()
 
     datasets = [
-            # [base_directory_QCD, f"QCD_{model_type}_eventidx"],
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_700_0p3_{model_type}_eventidx"],
+            [base_directory_QCD, f"QCD_{model_type}_eventidx"],
+            # [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_700_0p3_{model_type}_eventidx"],
             # [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_700_0p5_{model_type}_eventidx"],
             # [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_700_0p7_{model_type}_eventidx"],
 
@@ -86,8 +88,8 @@ def main(name, model_type):
 
     
     model_names = [  
-        # "QCD",
-        "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak/",
+        "QCD",
+        # "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak/",
         # "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.5_alpha-peak/",
         # "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.7_alpha-peak/",
         # "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.3_alpha-peak/",
@@ -109,17 +111,24 @@ def main(name, model_type):
 
 
 
-    wp,_ ,_ ,_ ,_ = get_threshold_from_sic(name)
-    output_directory_tmp = "/work/rhampp/tmp/SVJ_tagger"
+    wp,_ ,_ ,_ ,_ = get_threshold_from_sic(name, file_name='Eventlevel_ROC.pkl')
+    output_directory_tmp = "/work/rhampp/tmp/SVJ_tagger2"
+
+
+    if not os.path.exists(output_directory_tmp):
+        os.mkdir(output_directory_tmp)
+        print(f"Created directory: {output_directory_tmp}")
+
 
     for model_name, dataset in zip(model_names, datasets):
-        output_directory = "root://t3dcachedb03.psi.ch///pnfs/psi.ch/cms/trivcat/store/user/rhampp/Tagged/" + model_name
+        output_directory = "root://t3dcachedb03.psi.ch///pnfs/psi.ch/cms/trivcat/store/user/rhampp/Tagged_cut0p2_small/"
 
+        output_directory =output_directory + model_name
 
         dataloader = GraphDataLoader_tagger(
             [dataset],
-            window_to_load=[[0,1] for _ in range(1)],
-            batch_size=512,
+            window_to_load=[[0.7,1] for _ in range(1)],
+            batch_size=1024,
             normalizer=normalizer,
         )
 
@@ -153,8 +162,6 @@ def main(name, model_type):
 
 
         # Loop over all Files and add an additional branch to indicate whether it is a SVJ or not
-        ## check also for matching event index
-
         for file_name in os.listdir(dataset[0]):
 
             # Check if the file is a ROOT file
@@ -162,14 +169,15 @@ def main(name, model_type):
                 output_file_path = os.path.join(output_directory, file_name)
                 output_file_path_tmp = os.path.join(output_directory_tmp, file_name)
         
+                # Open file
                 with uproot.open(dataset[0] +"/"+ file_name) as infile:
                     tree = infile["Events"]
+                    cutflow = infile["CutFlow"].arrays()
+                    metadata = infile["Metadata"].arrays()
                     arrays = tree.arrays()
-
-                    # Create a new boolean array for the tagger
                     n_entries = len(arrays.FatJet_pt)
                     SVJ_tagger_array = [[] for _ in range(n_entries)]
-                    #SVJ_tagger_array = np.zeros(arrays.event, dtype=np.bool_)
+
                     # Loop over events to safe the SVJ tagger in the branch
                     for n in range(0,n_entries):
                         tagger_index = np.where(arrays.event[n] == tagger["event"])[0]
@@ -179,51 +187,35 @@ def main(name, model_type):
                                 tagger_event.append(tagger["SVJ"][tag])
                             else:
                                 print("event numbers don't match:",tagger["event"][tag],arrays.event[n] )
-                        
                         SVJ_tagger_array[n] = tagger_event
-              
-
-                    # for n in range(0,n_entries):
-                    #     tagger_index = np.where(arrays.event[n] == tagger["event"])[0][0]
-                    #     if (tagger["event"][tagger_index] == arrays.event[n] ) & (tagger["event"][tagger_index+1] == arrays.event[n]):
-                    #         SVJ_tagger_array[n] = [tagger["SVJ"][tagger_index],tagger["SVJ"][tagger_index+1]]
-                    #         tagger_index += 2
-                    #         print("SVJ_tagger, 2Jets",SVJ_tagger_array[n])
-                    #     elif (tagger["event"][tagger_index] == arrays.event[n] ) & (tagger["event"][tagger_index+1] != arrays.event[n]):
-                    #         SVJ_tagger_array[n] = [tagger["SVJ"][tagger_index]]
-                    #         print("SVJ_tagger, 1Jet",SVJ_tagger_array[n])
-                    #         tagger_index += 1
-                    #     else:
-                    #         print("event numbers don't match:",tagger["event"][tagger_index],arrays.event[n] )
-
 
                     # Add the new boolean branch to the arrays
                     arrays["FatJet_SVJtagger"] = SVJ_tagger_array
-
                     trees = {}
-                    trees["Events"] = arrays
-
-                    print(arrays["FatJet_SVJtagger"])
+                    trees["Events"] = arrays       
+                    trees["CutFlow"] = cutflow 
+                    trees["Metadata"] = metadata
                 
 
+                # Safe file with newly added branch
                 uproot4Utl.write_root_file(output_file_path_tmp, trees=trees)
 
                 # Copy produced file into storage element
-                # Construct the xrdcp command
                 xrdcp_command = ["xrdcp", output_file_path_tmp, output_file_path]
                 try:
                     subprocess.run(xrdcp_command, check=True)
                     print(f"File copied successfully from {output_file_path_tmp} to {output_file_path}")
                 except subprocess.CalledProcessError as e:
                     print(f"Error copying file: {e}")
-
+                
+                # Remove temporary file
                 os.remove(output_file_path_tmp)
-                break
+
 
             else: print(f"{file_name} not a file")
 
 
-
+    print(f"==> JetTagger completed in {time.time()-start:.2f} seconds")
         
 
 
