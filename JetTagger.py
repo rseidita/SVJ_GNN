@@ -28,8 +28,8 @@ def main(name, model_type):
 
     start = time.time()
 
-    base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ/"
-    base_directory_QCD = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/QCD/"
+    base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ_new/"
+    base_directory_QCD = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/Bkg/QCD_new"
 
     filename = "/" + name + ".pt"
     dict = torch.load("/t3home/rhampp/SVJ_GNN/output/"+ name +"/" + filename,  map_location=torch.device('cpu'))
@@ -111,8 +111,11 @@ def main(name, model_type):
 
 
 
-    wp,_ ,_ ,_ ,_ = get_threshold_from_sic(name, file_name='Eventlevel_ROC.pkl')
-    output_directory_tmp = "/work/rhampp/tmp/SVJ_tagger2"
+    wp,_ ,_ ,_ ,_ = get_threshold_from_sic(name, file_name='_eval_ROC_AUC.pkl')
+    # wp,_ ,_ ,_ ,_ = get_threshold_from_sic(name, file_name='Eventlevel_ROC.pkl')
+
+    # wp = 0.4
+    output_directory_tmp = "/work/rhampp/tmp/SVJ_tagger_LN5p_small3"
 
 
     if not os.path.exists(output_directory_tmp):
@@ -121,8 +124,7 @@ def main(name, model_type):
 
 
     for model_name, dataset in zip(model_names, datasets):
-        output_directory = "root://t3dcachedb03.psi.ch///pnfs/psi.ch/cms/trivcat/store/user/rhampp/Tagged_cut0p2_small/"
-
+        output_directory = "root://t3dcachedb03.psi.ch///pnfs/psi.ch/cms/trivcat/store/user/rhampp/Tagged_LN5p_cut0p86_small/"
         output_directory =output_directory + model_name
 
         dataloader = GraphDataLoader_tagger(
@@ -160,6 +162,8 @@ def main(name, model_type):
         tagger["SVJ"] = (np.array(tagger["score"]) > wp)
         tagger["event"] = np.concatenate(tagger["event"])
 
+        print("Run through the network done")
+
 
         # Loop over all Files and add an additional branch to indicate whether it is a SVJ or not
         for file_name in os.listdir(dataset[0]):
@@ -176,18 +180,20 @@ def main(name, model_type):
                     metadata = infile["Metadata"].arrays()
                     arrays = tree.arrays()
                     n_entries = len(arrays.FatJet_pt)
-                    SVJ_tagger_array = [[] for _ in range(n_entries)]
+                    SVJ_tagger_array = []
 
                     # Loop over events to safe the SVJ tagger in the branch
                     for n in range(0,n_entries):
                         tagger_index = np.where(arrays.event[n] == tagger["event"])[0]
+                        if len(tagger_index) == 0:
+                            continue
                         tagger_event = []
                         for tag in tagger_index:
                             if tagger["event"][tag] == arrays.event[n]:
                                 tagger_event.append(tagger["SVJ"][tag])
                             else:
-                                print("event numbers don't match:",tagger["event"][tag],arrays.event[n] )
-                        SVJ_tagger_array[n] = tagger_event
+                                print("Event numbers don't match:",tagger["event"][tag],arrays.event[n])
+                        SVJ_tagger_array.append(tagger_event)           
 
                     # Add the new boolean branch to the arrays
                     arrays["FatJet_SVJtagger"] = SVJ_tagger_array
@@ -195,7 +201,11 @@ def main(name, model_type):
                     trees["Events"] = arrays       
                     trees["CutFlow"] = cutflow 
                     trees["Metadata"] = metadata
-                
+
+                # skip the file if there is no matching event
+                if len(SVJ_tagger_array)==0:
+                    print("Skip file {file_name} because there are no matching events!")
+                    continue
 
                 # Safe file with newly added branch
                 uproot4Utl.write_root_file(output_file_path_tmp, trees=trees)
