@@ -1,7 +1,6 @@
 from sklearn.metrics import roc_curve, roc_auc_score
 import numpy as np
 from data_loading.graphDataLoader import GraphDataLoader
-from TrainingandValidation import output_directory
 import matplotlib.pyplot as plt
 import matplotlib.colors as colors
 import numpy as np
@@ -10,9 +9,9 @@ import pickle
 import os
 from itertools import chain
 
-from TrainingandValidation import output_directory
+from utils.utils_training import output_directory
 
-def Evaluate_model(base_directory_QCD, base_directory_SVJ, model_type, eval_type, batch_size, normalizer, model, device,window_to_load= [0.7,1], jet_idx=None):
+def Evaluate_model(base_directory_bkg, base_directory_SVJ, model_type, eval_type, batch_size, normalizer, model, device, window_to_load= [0.7,1], jet_idx=None):
     """Evaluate the model on each signal dataset independently
 
     Args:
@@ -24,6 +23,7 @@ def Evaluate_model(base_directory_QCD, base_directory_SVJ, model_type, eval_type
         normalizer
         model
         device
+        permutation: permutation from the dataloader
         window_to_load: for the evaluation: standard = [0.7,1]
         jet_idx(int): Which jet to look at (0,1,2), default = None -> look at all graphs in the window
 
@@ -36,43 +36,71 @@ def Evaluate_model(base_directory_QCD, base_directory_SVJ, model_type, eval_type
     """
 
 
- 
-    datasets = [
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_700_0p3_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_700_0p5_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_700_0p7_{model_type}{eval_type}"],
+    datasets_signal = [
+        [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_700_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_700_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_700_0p7_{model_type}{eval_type}"],
 
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_800_0p3_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_800_0p5_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_800_0p7_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_800_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_800_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_800_0p7_{model_type}{eval_type}"],
 
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_900_0p3_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_900_0p5_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_900_0p7_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_900_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_900_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_900_0p7_{model_type}{eval_type}"],
 
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1000_0p3_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1000_0p5_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1000_0p7_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1000_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1000_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1000_0p7_{model_type}{eval_type}"],
 
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1500_0p3_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1500_0p5_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1500_0p7_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1100_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1100_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1100_0p7_{model_type}{eval_type}"],
 
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_3000_0p3_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_3000_0p5_{model_type}{eval_type}"],
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_3000_0p7_{model_type}{eval_type}"],
-        ]
+        [base_directory_SVJ + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1200_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1200_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1200_0p7_{model_type}{eval_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1300_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1300_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1300_0p7_{model_type}{eval_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1400_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1400_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1400_0p7_{model_type}{eval_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1500_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1500_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1500_0p7_{model_type}{eval_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_3000_0p3_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_3000_0p5_{model_type}{eval_type}"],
+        [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_3000_0p7_{model_type}{eval_type}"],
+    ]
+
+    datasets_bkg = [
+        [base_directory_bkg + "QCD_new", f"QCD_{model_type}"],
+        [base_directory_bkg + "TTJet", f"TTJet_{model_type}"],
+    ]
 
     evaluation_dict = {}
-    dataloader_bkg = GraphDataLoader(
-            [[base_directory_QCD , f"QCD_{model_type}{eval_type}"]],
+    dataloader_qcd = GraphDataLoader(
+            [datasets_bkg[0]],
             window_to_load=[window_to_load for _ in range(1)],
             batch_size=batch_size,
             normalizer=normalizer,
             jet_idx=jet_idx,
         )
-
-    for dataset in datasets:
+    dataloader_ttjet = GraphDataLoader(
+            [datasets_bkg[1]],
+            window_to_load=[window_to_load for _ in range(1)],
+            batch_size=batch_size,
+            normalizer=normalizer,
+            jet_idx=jet_idx,
+        )
+  
+     
+    for dataset in datasets_signal:
         dataloader_sig = GraphDataLoader(
             [dataset],
             window_to_load=[window_to_load for _ in range(1)],
@@ -89,7 +117,7 @@ def Evaluate_model(base_directory_QCD, base_directory_SVJ, model_type, eval_type
         model.eval()
 
 
-        for graphs in chain(dataloader_bkg,dataloader_sig):
+        for graphs in chain(dataloader_qcd,dataloader_ttjet,dataloader_sig):
             weights.append(np.array(graphs.w))
             graphs = graphs.to(device)
             target = graphs.y
@@ -196,14 +224,20 @@ def plot_roc(roc, name, suffix = "_eval"):
     }
 
     colors = {
-        '700': 'plum',        # Plum
-        '800': '#E63946',     # Firebrick
-        '900': '#F4A261',     # Tangerine yellow
-        '1000': '#A8DADC',    # Powder blue
+        '700': 'rebeccapurple',        
+        '800': 'plum',     
+        '900': 'lightcoral',    
+        '1000': 'firebrick',        
+        '1100': 'gold',      
+        '1200': 'olive',     
+        '1300': 'yellowgreen',     
+        '1400': '#A8DADC',      # powder blue
         '1500': '#457B9D',    # Steel blue
         '3000': '#1D3557',    # Dark blue
     }
 
+    plt.figure()
+    ax = plt.gca()
  
     # Iterate over each key in roc dictionary and plot the curves
     for key in roc:
@@ -224,10 +258,7 @@ def plot_roc(roc, name, suffix = "_eval"):
     plt.ylabel("True Positive Rate")
 
     # Create the first legend for MZ values
-    first_legend = plt.legend(handles=legend_handles_mz, loc=[0.735,0.02])
-    ax = plt.gca().add_artist(first_legend)
-
-    plt.legend(handles=legend_handles_rinv, loc=[0.5,0.02])
+    add_legends(ax,[legend_handles_mz,legend_handles_rinv])
     plt.grid()
 
     output_path = output_directory(name)
@@ -286,7 +317,7 @@ def plot_auc(auc, name, suffix = "_eval",  variable_name = "AUC"):
     new_cmap.set_under('white', 0.01)
 
     # Draw AUC table using matplotlib
-    plt.figure(figsize=(10, 10))
+    plt.figure(figsize=(12, 12))
     im  = plt.imshow(gridxy, cmap=new_cmap, interpolation='nearest')
     # Show value auc in each bin
     for idx_x, x in enumerate(x_list):
@@ -335,18 +366,36 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
         '0.7': ':'
     }
 
+    # colors = {
+    #     '700': 'plum',        # Plum
+    #     '800': '#E63946',     # Firebrick
+    #     '900': '#F4A261',     # Tangerine yellow
+    #     '1000': '#A8DADC',    # Powder blue
+    #     '1500': '#457B9D',    # Steel blue
+    #     '3000': '#1D3557',    # Dark blue
+    #     'qcd': 'dimgrey',
+    # }
+
+
     colors = {
-        '700': 'plum',        # Plum
-        '800': '#E63946',     # Firebrick
-        '900': '#F4A261',     # Tangerine yellow
-        '1000': '#A8DADC',    # Powder blue
+        '700': 'rebeccapurple',        
+        '800': 'plum',     
+        '900': 'lightcoral',    
+        '1000': 'firebrick',        
+        '1100': 'gold',      
+        '1200': 'olive',     
+        '1300': 'yellowgreen',     
+        '1400': '#A8DADC',      # powder blue
         '1500': '#457B9D',    # Steel blue
         '3000': '#1D3557',    # Dark blue
-        'qcd': 'dimgrey',
+        'qcd': 'dimgrey',  
     }
  
     # Iterate over each key in roc dictionary and add the scores
     qcd = True
+
+    plt.figure()
+    ax = plt.gca()
     for key in evaluation_dict:
         parts = key.split("_")
         label = f"$M_{{Z'}} = {parts[1]},  r_{{inv}} = 0.{parts[2].split('p')[1]}$"
@@ -370,7 +419,7 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
     # Dummy plots for rinv values
     legend_handles_rinv = [plt.Line2D([0], [1], color='black',linewidth = 0.9, linestyle=linestyle, label=f"$r_{{inv}} = {rinv}$") for rinv, linestyle in line_styles.items()]
 
-    additional_handle_qcd = plt.Line2D([0], [1], color='dimgrey', linewidth=0.9, linestyle='-', label='QCD')
+    additional_handle_qcd = plt.Line2D([0], [1], color='dimgrey', linewidth=0.9, linestyle='-', label='Bkg')
 
     # Combine all legend handles
     legend_handles_rinv = legend_handles_rinv + [additional_handle_qcd]
@@ -379,11 +428,7 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
     plt.xlabel("Score")
     plt.ylabel("Number of Graphs")
 
-    # Create the first legend for MZ values
-    first_legend = plt.legend(handles=legend_handles_mz, loc=[0.735,0.59])
-    ax = plt.gca().add_artist(first_legend)
-
-    plt.legend(handles=legend_handles_rinv, loc=[0.5,0.76])
+    add_legends(ax,[legend_handles_mz,legend_handles_rinv])
     plt.grid()
 
     output_path = output_directory(name)
@@ -391,8 +436,11 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
     plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
     plt.close()
 
+
     #Again but normalized!
     qcd = True
+    plt.figure()
+    ax = plt.gca()
     for key in evaluation_dict:
         parts = key.split("_")
         label = f"$M_{{Z'}} = {parts[1]},  r_{{inv}} = 0.{parts[2].split('p')[1]}$"
@@ -416,7 +464,7 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
     # Dummy plots for rinv values
     legend_handles_rinv = [plt.Line2D([0], [1], color='black',linewidth = 0.9, linestyle=linestyle, label=f"$r_{{inv}} = {rinv}$") for rinv, linestyle in line_styles.items()]
 
-    additional_handle_qcd = plt.Line2D([0], [1], color='dimgrey', linewidth=0.9, linestyle='-', label='QCD')
+    additional_handle_qcd = plt.Line2D([0], [1], color='dimgrey', linewidth=0.9, linestyle='-', label='Bkg')
 
     # Combine all legend handles
     legend_handles_rinv = legend_handles_rinv + [additional_handle_qcd]
@@ -427,19 +475,70 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
 
     # Create the first legend for MZ values            canvas = ROOT.TCanvas("canvas", "canvas", 1200, 1200)
 
-    first_legend = plt.legend(handles=legend_handles_mz, loc=[0.735,0.59])
-    ax = plt.gca().add_artist(first_legend)
+    add_legends(ax,[legend_handles_mz,legend_handles_rinv])
 
-    plt.legend(handles=legend_handles_rinv, loc=[0.5,0.76])
     plt.grid()
+    plt.yscale('log')
 
     output_path = output_directory(name)
     outout_plot_name = name + suffix +"_score_normalized.png"
     plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
     plt.close()
 
+def plot_dnn(evaluation_dict, name, suffix = "_eval"):
+    #Plot all signals vs Bkg
+    qcd = True
+    score_sig = []
+    score_bkg = []
+    for key in evaluation_dict:
+
+        for label, score in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"]):
+            if label == 1:
+                score_sig.append(score)
+            elif (qcd == True) & (label == 0):
+                score_bkg.append(score)
+        
+        if qcd == True:
+            plt.hist(score_bkg,bins = 50 , color='#457B9D',stacked = True, density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="QCD")
+        qcd = False
+
+    plt.hist(score_sig,bins = 50 , color='firebrick',stacked = True, density=True, linewidth = 0.9, linestyle='-', histtype = 'step', label="all Signals")
+    plt.legend()
+
+    # Plot the scores in a histogram
+    plt.xlabel("DNN Score")
+    plt.ylabel("Number of Graphs")
 
 
+    plt.grid()
+    plt.yscale('log')
+
+    output_path = output_directory(name)
+    outout_plot_name = name + suffix +"_DNN_Score.png"
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
+    plt.close()
+
+
+def add_legends(ax, legends, loc='upper right', spacing=0.26):
+    """
+    Add multiple legends to a Matplotlib axes.
+
+    Parameters:
+        ax: The axes to which legends are added.
+        legends: A list of legend handles, each a list of Line2D objects to be included in a legend.
+        loc: Location of the legends (default 'upper right').
+        spacing: Horizontal space between legends (default 0.1).
+    """
+    num_legends = len(legends)
+    base_anchor = (0.995, 0.995)
+
+    
+    for i, handles in enumerate(legends):
+        # Adjust the x-coordinate of the bbox_to_anchor for each legend
+        x_offset = base_anchor[0] - i * spacing
+        legend = ax.legend(handles=handles, loc=loc, bbox_to_anchor=(x_offset, base_anchor[1]))
+        ax.add_artist(legend)
+    
 def plot_sic(roc, name, suffix = "_eval"):
     """Plot SIC for all Mediator masses and rinv in one plot
 
@@ -458,14 +557,22 @@ def plot_sic(roc, name, suffix = "_eval"):
     }
 
     colors = {
-        '700': 'plum',        # Plum
-        '800': '#E63946',     # Firebrick
-        '900': '#F4A261',     # Tangerine yellow
-        '1000': '#A8DADC',    # Powder blue
+        '700': 'rebeccapurple',        
+        '800': 'plum',     
+        '900': 'lightcoral',    
+        '1000': 'firebrick',        
+        '1100': 'gold',      
+        '1200': 'olive',     
+        '1300': 'yellowgreen',     
+        '1400': '#A8DADC',      # powder blue
         '1500': '#457B9D',    # Steel blue
         '3000': '#1D3557',    # Dark blue
     }
- 
+
+    
+    plt.figure()
+    ax = plt.gca()
+
     # Iterate over each key in roc dictionary and plot the curves
     for key in roc:
         parts = key.split("_")
@@ -488,15 +595,11 @@ def plot_sic(roc, name, suffix = "_eval"):
     # Plot the actual ROC curves
     plt.ylabel("SIC")
     plt.xlabel("True Positive Rate")
-    plt.ylim(0,30)
+    plt.ylim(0,6)
     plt.axhline(y=1, color='gray', linestyle='--')
     #plt.yscale('log')
 
-    # Create the first legend for MZ values
-    first_legend = plt.legend(handles=legend_handles_mz, loc=[0.735,0.62])
-    ax = plt.gca().add_artist(first_legend)
-
-    plt.legend(handles=legend_handles_rinv, loc=[0.5,0.79])
+    add_legends(ax,[legend_handles_mz,legend_handles_rinv])
     plt.grid()
 
     output_path = output_directory(name)
@@ -506,8 +609,71 @@ def plot_sic(roc, name, suffix = "_eval"):
     print(f"{outout_plot_name} has been saved.")
 
     
+def plot_sic_small(roc, name, suffix = "_eval"):
+    """Plot SIC for a small choise of Mediator masses and rinv in one plot
 
-    
-    
-    
+    Args:
+        roc(dict): a dict created in roc_auc() -> roc[key = different signal hypotheses] = {"fpr": fpr_,"tpr": tpr_,"threshold": thres_}
+        name(str): Name of the training for saving the png
+       
 
+    Returns:
+    """
+
+    line_styles = {
+        '0.3': '-',
+        '0.5': '--',
+        '0.7': ':'
+    }
+
+    colors = {
+        '700': 'plum',        # Plum
+        '900': '#E63946',     # Firebrick
+        '1100': 'gold',    
+        '1300': '#457B9D',    # Steel blue
+        '1500': '#1D3557',    # Dark blue
+    }
+    
+    # List of numbers to check for in the key
+    numbers_to_check = ["800", "1000", "1200", "1400", "3000"]
+    
+    plt.figure()
+    ax = plt.gca()
+
+    # Iterate over each key in roc dictionary and plot the curves
+    for key in roc:
+        if any(num in key for num in numbers_to_check):
+            continue
+        parts = key.split("_")
+        label = f"$M_{{Z'}} = {parts[1]},  r_{{inv}} = 0.{parts[2].split('p')[1]}$"
+        rinv_value = f"0.{parts[2].split('p')[1]}"
+        m_z = parts[1]
+
+        tpr = roc[key]["tpr"]
+        sigma = roc[key]["sic"]
+
+
+        plt.plot(tpr, sigma, color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], label=label)
+
+    # Create dummy plots for separate legends
+    # Dummy plots for MZ values
+    legend_handles_mz = [plt.Line2D([0], [1], color=color, linewidth = 0.9,linestyle='-', label=f"$M_{{Z'}} = {m_z}$") for m_z, color in colors.items()]
+    # Dummy plots for rinv values
+    legend_handles_rinv = [plt.Line2D([0], [1], color='black',linewidth = 0.9, linestyle=linestyle, label=f"$r_{{inv}} = {rinv}$") for rinv, linestyle in line_styles.items()]
+
+    # Plot the actual ROC curves
+    plt.ylabel("SIC")
+    plt.xlabel("True Positive Rate")
+    plt.ylim(0,3)
+    plt.axhline(y=1, color='gray', linestyle='--')
+    #plt.yscale('log')
+
+    plt.grid()
+
+    add_legends(ax,[legend_handles_mz,legend_handles_rinv])
+
+    output_path = output_directory(name)
+    outout_plot_name = name +suffix + "_SIC_small.png"
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
+    plt.close()
+    print(f"{outout_plot_name} has been saved.")

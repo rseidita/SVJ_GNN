@@ -10,7 +10,7 @@ from utils.utils_training import get_model_parameters
 
 def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_idx):
         
-    base_directory_QCD = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/QCD/"
+    base_directory_bkg = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/Bkg/"
     base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ_new/"
 
 
@@ -18,9 +18,6 @@ def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_id
     start_eva = time.time()
 
     #Load model
-    # path = os.path.join(os.getcwd(),  "output/LundNet5+_SVJ-QCD_vs2")
-    # dict = torch.load(path + "/LundNet5+_SVJ-QCD_vs2.pt",  map_location=torch.device('cpu'))
-    # print(path + "/LundNet5+_SVJ-QCD_vs2.pt")
     filename = "/" + name + ".pt"
     dict = torch.load("/t3home/rhampp/SVJ_GNN/output/"+ name +"/" + filename,  map_location=torch.device('cpu'))
     nLund_variables, energy_fractions, four_vectors = get_model_parameters(model_type)
@@ -49,7 +46,7 @@ def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_id
     model = model.to(device)
     
 
-    evaluation_dict = et.Evaluate_model(base_directory_QCD, base_directory_SVJ, model_type, eval_type, batch_size, normalizer, model, device, window_to_load, jet_idx)
+    evaluation_dict = et.Evaluate_model(base_directory_bkg, base_directory_SVJ, model_type, eval_type, batch_size, normalizer, model, device, window_to_load, jet_idx)
 
     # compute roc and auc, safe them also in pickels
     roc, auc = et.roc_auc(evaluation_dict, name, suffix)
@@ -57,6 +54,7 @@ def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_id
     et.plot_roc(roc, name, suffix)
     et.plot_scores(evaluation_dict, name, suffix)
     et.plot_sic(roc, name, suffix)
+    et.plot_dnn(evaluation_dict, name, suffix)
 
     print(f"==> Evaluation completed in {time.time()-start_eva:.2f} seconds")
 

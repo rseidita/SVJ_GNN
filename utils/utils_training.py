@@ -6,9 +6,6 @@ import numpy as np
 import uproot
 import pandas as pd
 
-import utils.utils_evaluation as et
-
-
 
 def Normalize(base_directory_bkg, base_directory_signal, model_type):
     """Create means and stds for the normalization.
@@ -23,8 +20,13 @@ def Normalize(base_directory_bkg, base_directory_signal, model_type):
     """
 
 
-    bkg_directory = [base_directory_bkg]
-    Bkg = {f"QCD_{model_type}" : None}
+    bkg_directory = [
+        base_directory_bkg + "QCD_new",
+        base_directory_bkg + "TTJet",
+        ]  
+    
+    Bkg = {f"QCD_{model_type}" : None,
+           f"TTJet_{model_type}" : None,}
 
     signal_directory = [
         base_directory_signal + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak",
@@ -43,19 +45,40 @@ def Normalize(base_directory_bkg, base_directory_signal, model_type):
         base_directory_signal + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.5_alpha-peak",
         base_directory_signal + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.7_alpha-peak",
 
+        base_directory_signal + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.3_alpha-peak", 
+        base_directory_signal + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.5_alpha-peak", 
+        base_directory_signal + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.7_alpha-peak", 
+         
+        base_directory_signal + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.3_alpha-peak", 
+        base_directory_signal + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.5_alpha-peak", 
+        base_directory_signal + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.7_alpha-peak", 
+         
+        base_directory_signal + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.3_alpha-peak", 
+        base_directory_signal + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.5_alpha-peak",
+        base_directory_signal + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.7_alpha-peak", 
+
+        base_directory_signal + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.3_alpha-peak",
+        base_directory_signal + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.5_alpha-peak",
+        base_directory_signal + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.7_alpha-peak",
+
         base_directory_signal + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.3_alpha-peak",
         base_directory_signal + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.5_alpha-peak",
         base_directory_signal + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.7_alpha-peak",
 
         base_directory_signal + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.3_alpha-peak",
         base_directory_signal + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.5_alpha-peak",
-        base_directory_signal + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.7_alpha-peak"]
+        base_directory_signal + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.7_alpha-peak"
+        ]
 
     signal= {
         f"SVJ_700_0p3_{model_type}" : None, f"SVJ_700_0p5_{model_type}" : None, f"SVJ_700_0p7_{model_type}" : None, 
         f"SVJ_800_0p3_{model_type}" : None, f"SVJ_800_0p5_{model_type}" : None, f"SVJ_800_0p7_{model_type}" : None,
         f"SVJ_900_0p3_{model_type}" : None, f"SVJ_900_0p5_{model_type}" : None, f"SVJ_900_0p7_{model_type}" : None,
         f"SVJ_1000_0p3_{model_type}" : None, f"SVJ_1000_0p5_{model_type}" : None, f"SVJ_1000_0p7_{model_type}" : None,
+        f"SVJ_1100_0p3_{model_type}" : None, f"SVJ_1100_0p5_{model_type}" : None, f"SVJ_1100_0p7_{model_type}" : None,
+        f"SVJ_1200_0p3_{model_type}" : None, f"SVJ_1200_0p5_{model_type}" : None, f"SVJ_1200_0p7_{model_type}" : None,
+        f"SVJ_1300_0p3_{model_type}" : None, f"SVJ_1300_0p5_{model_type}" : None, f"SVJ_1300_0p7_{model_type}" : None,
+        f"SVJ_1400_0p3_{model_type}" : None, f"SVJ_1400_0p5_{model_type}" : None, f"SVJ_1400_0p7_{model_type}" : None,
         f"SVJ_1500_0p3_{model_type}" : None, f"SVJ_1500_0p5_{model_type}" : None, f"SVJ_1500_0p7_{model_type}" : None,
         f"SVJ_3000_0p3_{model_type}" : None, f"SVJ_3000_0p5_{model_type}" : None, f"SVJ_3000_0p7_{model_type}" : None,
         }

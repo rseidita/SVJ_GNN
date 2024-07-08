@@ -28,7 +28,6 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
         jet_idx(int): Which jet to look at (0,1,2), default = None -> look at all graphs in the window
 
 
-
     Returns: -
         
     """
@@ -39,11 +38,11 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
     output_path = utrain.output_directory(name)
 
     # Directory for the graphs
-    base_directory_QCD = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/QCD"
+    base_directory_bkg = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/Bkg/"
     base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ_new/"
 
     # create on the fly normalizer and save the mean and std 
-    means, stds = utrain.Normalize(base_directory_QCD, base_directory_SVJ, model_type)
+    means, stds = utrain.Normalize(base_directory_bkg, base_directory_SVJ, model_type)
     normalizer = OnTheFlyNormalizer(["x"], means, stds)
 
     normalize_dict = {
@@ -54,74 +53,67 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
         pickle.dump(normalize_dict, f)
     print(f"Normalization saved in {os.path.join(output_path, 'Normalization.pkl')}")
 
+    datasets = [
+        [base_directory_bkg + "QCD_new", f"QCD_{model_type}"],
+        [base_directory_bkg + "TTJet", f"TTJet_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_700_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_700_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_700_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_800_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_800_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_800_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_900_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_900_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_900_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1000_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1000_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1000_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1100_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1100_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1100GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1100_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1200_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1200_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1200GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1200_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1300_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1300_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1300GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1300_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1400_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1400_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1400GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1400_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1500_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1500_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1500_0p7_{model_type}"],
+
+        [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_3000_0p3_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_3000_0p5_{model_type}"],
+        [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_3000_0p7_{model_type}"],
+    ]
+
+    dfb = 0.5/2 ### much more QCD than TTJet!
+    dfs = 0.5/30
+    df = [dfb]*2 + [dfs]*30
     # Create the data loaders for training and validation
     dataloader_training = GraphDataLoader(
-        [
-            [base_directory_QCD, f"QCD_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_700_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_700_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_700_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_800_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_800_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_800_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_900_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_900_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_900_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1000_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1000_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1000_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1500_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1500_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1500_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_3000_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_3000_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_3000_0p7_{model_type}"],
-        ],
-        window_to_load=[[0., 0.6] for _ in range(20)],
-        dataset_fraction=[0.5,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,
-                          0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,],
+        datasets,
+        window_to_load=[[0., 0.6] for _ in range(len(datasets))],
+        dataset_fraction=df,
         batch_size=batch_size,
         normalizer=normalizer,
     )
     
-
     dataloader_validation = GraphDataLoader(
-        [
-            [base_directory_QCD, f"QCD_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_700_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_700_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_700_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_800_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_800_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-800GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_800_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_900_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_900_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-900GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_900_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1000_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1000_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1000_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_1500_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_1500_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-1500GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_1500_0p7_{model_type}"],
-
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_3000_0p3_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_3000_0p5_{model_type}"],
-            [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_3000_0p7_{model_type}"],
-        ],
-        window_to_load=[[0.6, 0.7] for _ in range(20)],
-        dataset_fraction=[0.5,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,
-                          0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,0.5/18,],
+        datasets,
+        window_to_load=[[0.6, 0.7] for _ in range(len(datasets))],
+        dataset_fraction=df,
         batch_size=batch_size,
         normalizer=normalizer,
     )
@@ -159,7 +151,7 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
     print("==> Evaluate Model...")
     start_eva = time.time()
     # Run test set through model
-    evaluation_dict = ueval.Evaluate_model(base_directory_QCD, base_directory_SVJ,model_type,eval_type, batch_size, normalizer, model, eval_type, device, window_to_load=[0.7,1], jet_idx=None)
+    evaluation_dict = ueval.Evaluate_model(base_directory_bkg, base_directory_SVJ,model_type,eval_type, batch_size, normalizer, model, device, window_to_load=[0.7,1], jet_idx=None)
 
       # compute roc and auc, safe them also in pickels
     roc, auc = ueval.roc_auc(evaluation_dict, name)
@@ -167,6 +159,8 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
     ueval.plot_roc(roc, name)
     ueval.plot_scores(evaluation_dict,name)
     ueval.plot_sic(roc, name)
+    ueval.plot_dnn(evaluation_dict, name, suffix = "Eventlevel_")
+
     print(f"==> Evaluation completed in {time.time()-start_eva:.2f} seconds")
 
     return
