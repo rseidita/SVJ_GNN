@@ -385,7 +385,7 @@ class JetGraphProducer(InMemoryDataset):
         extra_obs_to_save_per_event (list): List of extra event-level observables to store in the graph (must be available in the root file)
         extra_obs_to_compute_per_event (list): List of extra event-level observables to compute and store in the graph (callable functions that take the event as input and return a float)
         extra_obs_to_load (list): List of extra observables to load from the root file (must be available in the root file)
-        save_jet_index_per_event (bool): Whether to save jet index (leading or subleading jet)
+        save_jet_index_per_event (bool): Whether to save the jet index
         mask (ak.Array): Mask to apply to the root file
         label (float): Label to add to the graph for supervised learning
         verbose (bool): Whether to print progress bars
@@ -421,7 +421,7 @@ class JetGraphProducer(InMemoryDataset):
         extra_obs_to_save_per_event=[],
         extra_obs_to_compute_per_event:list[callable]=[],
         extra_obs_to_load=[],
-        save_jet_idx_per_jet=False,
+        save_jet_idx=False,
         mask=None,
         label:float=0.,
         verbose=False,
@@ -453,7 +453,7 @@ class JetGraphProducer(InMemoryDataset):
         self.extra_obs_to_save_per_event = extra_obs_to_save_per_event
         self.extra_obs_to_compute_per_event = extra_obs_to_compute_per_event
         self.extra_obs_to_load = extra_obs_to_load
-        self.save_jet_idx_per_jet = save_jet_idx_per_jet
+        self.save_jet_idx = save_jet_idx
         self.mask = mask
         self.label = label
         self.verbose = verbose
@@ -696,8 +696,8 @@ class JetGraphProducer(InMemoryDataset):
                     graph.event_number = torch.tensor([i_ev], dtype=torch.long)
 
                 # Add jet index if requested
-                if self.save_jet_idx_per_jet:
-                    graph["Jet_idx"] = torch.tensor([jet_idx], dtype=torch.int)
+                if self.save_jet_idx:
+                    graph["jet_idx"] = torch.tensor([jet_idx], dtype=torch.int)
 
                 # Add any extra jet-level observables if requested
                 for obs in self.extra_obs_to_save_per_jet:
@@ -742,7 +742,7 @@ class JetGraphProducer(InMemoryDataset):
                 "FatJetPFCands_jetIdx",
                 "FatJetPFCands_pFCandsIdx",
                 "nFatJet",
-                #"genWeight",
+                "genWeight",
                 "FatJet_eta",
                 "FatJet_phi",
                 "FatJet_pt",

@@ -30,7 +30,7 @@ class GraphDataLoader(DataLoader):
         exclude_keys (Optional[List[str]]): A list of strings specifying which
             attributes of the data object should not be batched together. If None,
             the default behavior is used.
-        jet_idx (Optional(int)): An integer to filter for the leading(0) subleading(1) or subsubleading(2) jet of the data
+        jet_idx (Optional(int)): An integer to filter for the corresponding jet (pt ordered) in every event
         **kwargs: Additional keyword arguments to be passed to the DataLoader.
 
     Returns:
