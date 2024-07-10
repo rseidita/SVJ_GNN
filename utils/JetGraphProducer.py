@@ -400,7 +400,8 @@ class JetGraphProducer(InMemoryDataset):
         extra_obs_to_save_per_jet (list): List of extra jet-level observables to store in the graph (must be available in the root file)
         extra_obs_to_save_per_event (list): List of extra event-level observables to store in the graph (must be available in the root file)
         extra_obs_to_compute_per_event (list): List of extra event-level observables to compute and store in the graph (callable functions that take the event as input and return a float)
-        extra_obs_to_load (list): List of extra observables to load from the root file needed to compute extra on-the-fly quantities (must be available in the root file)
+        extra_obs_to_load (list): List of extra observables to load from the root file (must be available in the root file)
+        save_jet_idx (bool): Whether to save the jet index
         mask (ak.Array): Mask to apply to the root file
         label (float): Label to add to the graph for supervised learning
         verbose (bool): Whether to print progress bars
@@ -437,6 +438,7 @@ class JetGraphProducer(InMemoryDataset):
         extra_obs_to_save_per_event=[],
         extra_obs_to_compute_per_event:list[callable]=[],
         extra_obs_to_load=[],
+        save_jet_idx=False,
         mask=None,
         label:float=0.,
         verbose=False,
@@ -469,6 +471,7 @@ class JetGraphProducer(InMemoryDataset):
         self.extra_obs_to_save_per_event = extra_obs_to_save_per_event
         self.extra_obs_to_compute_per_event = extra_obs_to_compute_per_event
         self.extra_obs_to_load = extra_obs_to_load
+        self.save_jet_idx = save_jet_idx
         self.mask = mask
         self.label = label
         self.verbose = verbose
@@ -532,6 +535,7 @@ class JetGraphProducer(InMemoryDataset):
                     phi = event["PFCands_phi"][pf_cands_matching_filter]
                     pdgId = event["PFCands_pdgId"][pf_cands_matching_filter]
                     mass = event["PFCands_mass"][pf_cands_matching_filter]
+                    jet_idx = nj
                 elif self.input_format == "TreeMaker2":
                     jet_pt = event[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPt"][nj]
                     jet_eta = event[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fEta"][nj]
@@ -714,6 +718,10 @@ class JetGraphProducer(InMemoryDataset):
                 # Add the event number if requested
                 if self.save_event_number:
                     graph.event_number = torch.tensor([i_ev], dtype=torch.long)
+
+                # Add jet index if requested
+                if self.save_jet_idx:
+                    graph["jet_idx"] = torch.tensor([jet_idx], dtype=torch.int)
 
                 # Add any extra jet-level observables if requested
                 for obs in self.extra_obs_to_save_per_jet:
