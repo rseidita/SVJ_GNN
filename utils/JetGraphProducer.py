@@ -430,7 +430,7 @@ class JetGraphProducer(InMemoryDataset):
         use_lund_decomp=False,
         n_lund_vars=3,
         save_4vectors_in_lund_tree=False,
-        save_energy_fractions=True,
+        save_energy_fractions=False,
         kt_cut=None,
         weights=None,
         extra_obs_to_save_per_jet=[],
