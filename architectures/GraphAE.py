@@ -1,5 +1,5 @@
 import torch
-from torch_geometric.nn import GCNConv, GINConv, InnerProductDecoder
+from torch_geometric.nn import GCNConv, InnerProductDecoder
 
 EPS = 1e-15
 
@@ -13,31 +13,10 @@ class encoder(torch.nn.Module):
     def __init__(self, num_features, architecture):
         super(encoder, self).__init__()
         self.layers = torch.nn.ModuleList()
-        # self.layers.append( GCNConv(num_features, architecture[0], improved=True) )
-        self.layers.append( GINConv(
-            torch.nn.Sequential(
-                torch.nn.Linear(num_features, num_features),
-                torch.nn.ReLU(),
-                torch.nn.Linear(num_features, architecture[0]),
-                torch.nn.ReLU(),
-                torch.nn.Linear(architecture[0], architecture[0]),
-                torch.nn.ReLU()
-                )
-            )
-        )
+        self.layers.append( GCNConv(num_features, architecture[0], improved=True) )
         
         for in_dim, out_dim in zip(architecture[:-1], architecture[1:]):
-            self.layers.append( GINConv(
-                torch.nn.Sequential(
-                    torch.nn.Linear(in_dim, in_dim),
-                    torch.nn.ReLU(),
-                    torch.nn.Linear(in_dim, out_dim),
-                    torch.nn.ReLU(),
-                    torch.nn.Linear(out_dim, out_dim),
-                    torch.nn.ReLU()
-                    )
-                ) 
-            )
+            self.layers.append( GCNConv(in_dim, out_dim, improved=True) )
         
     def forward(self, x, edge_index):
         for layer in self.layers[:-1]:
@@ -47,19 +26,8 @@ class encoder(torch.nn.Module):
 class features_decoder(torch.nn.Module):
     def __init__(self, num_features, architecture):
         super(features_decoder, self).__init__()
+        self.decoder = GCNConv(architecture[-1], num_features, improved=True)
         
-        # Sequential model to be passed as nn parameter to GINConv
-        self.gin_model = torch.nn.Sequential(
-            torch.nn.Linear(architecture[-1], architecture[-1]),
-            torch.nn.ReLU(),
-            torch.nn.Linear(architecture[-1], num_features),
-            torch.nn.ReLU(),
-            torch.nn.Linear(num_features, num_features),
-            torch.nn.ReLU()
-        )
-        
-        self.decoder = GINConv(self.gin_model, eps=0.0)
-
     def forward(self, z, edge_index):
         return self.decoder(z, edge_index)
     
@@ -71,7 +39,7 @@ class graphAE(torch.nn.Module):
         self.features_decoder = features_decoder(num_features, architecture)
         
     def edges_loss(self, x, edge_index, negative_edge_index, weight=None):
-
+        
         z = self.encoder(x, edge_index)
         
         if weight is None:
