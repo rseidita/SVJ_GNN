@@ -202,3 +202,27 @@ def make_histograms(signals_dict, bkg_data, bkg_weights, signal_keys, nbins, fil
 
     canvas.Update()
     canvas.Close()
+
+
+from sklearn.metrics import roc_auc_score, roc_curve
+
+
+def calc_auc(signal_losses, bkg_losses):
+    y_true = {}
+    y_score = {}
+    fpr = {}
+    tpr = {}
+    auc = {}
+
+
+    for signal_name, losses in signal_losses.items():
+        y_true[signal_name] = [0]*len(bkg_losses) + [1]*len(losses)
+        y_score[signal_name] = bkg_losses + losses
+
+        fpr[signal_name], tpr[signal_name], _ = roc_curve(y_true[signal_name], y_score[signal_name])
+        auc[signal_name] = roc_auc_score(y_true[signal_name], y_score[signal_name])
+
+
+    mean_auc = np.mean(list(auc.values()))
+
+    return auc, mean_auc
