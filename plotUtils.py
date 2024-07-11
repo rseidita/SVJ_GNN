@@ -90,12 +90,16 @@ def plot_sic(roc, name, output_directory, suffix = "_eval"):
     }
 
     colors = {
-        '700': 'plum',        # Plum
-        '800': '#E63946',     # Firebrick
-        '900': '#F4A261',     # Tangerine yellow
-        '1000': '#A8DADC',    # Powder blue
-        '1500': '#457B9D',    # Steel blue
-        '3000': '#1D3557',    # Dark blue
+        '700': 'hotpink',        
+        '800': 'mediumseagreen',     
+        '900': 'gold',    
+        '1000': 'darkorange',    
+        '1100': 'darkgreen',
+        '1200': 'rebeccapurple',
+        '1300': 'deepskyblue',
+        '1400': 'crimson',
+        '1500': 'dodgerblue',    
+        '3000': 'brown',    
     }
  
     # Iterate over each key in roc dictionary and plot the curves
@@ -226,3 +230,91 @@ def calc_auc(signal_losses, bkg_losses):
     mean_auc = np.mean(list(auc.values()))
 
     return auc, mean_auc
+
+
+def calc_roc_auc(signal_losses, bkg_losses):
+    y_true = {}
+    y_score = {}
+    fpr = {}
+    tpr = {}
+    auc = {}
+    thresholds = {}
+    roc = {}
+
+    for signal_name, losses in signal_losses.items():
+        y_true[signal_name] = [0]*len(bkg_losses) + [1]*len(losses)
+        y_score[signal_name] = bkg_losses + losses
+
+        fpr[signal_name], tpr[signal_name], thresholds[signal_name] = roc_curve(y_true[signal_name], y_score[signal_name])
+        auc[signal_name] = roc_auc_score(y_true[signal_name], y_score[signal_name])
+        roc[signal_name] = {"fpr": fpr[signal_name],
+                            "tpr": tpr[signal_name],
+                            "threshold": thresholds[signal_name],}
+
+
+    mean_auc = np.mean(list(auc.values()))
+
+    return roc, auc
+
+def plot_roc(signal_losses, bkg_losses, output_dir):
+
+    line_styles = {
+            '0.3': '-',
+            '0.5': '--',
+            '0.7': ':'
+        }
+
+    colors = {
+        '700': 'hotpink',        
+        '800': 'mediumseagreen',     
+        '900': 'gold',    
+        '1000': 'darkorange',    
+        '1100': 'darkgreen',
+        '1200': 'rebeccapurple',
+        '1300': 'deepskyblue',
+        '1400': 'crimson',
+        '1500': 'dodgerblue',    
+        '3000': 'brown',    
+    }
+
+    y_true = {}
+    y_score = {}
+    fpr = {}
+    tpr = {}
+
+    for signal_name, losses in signal_losses.items():
+        y_true[signal_name] = [0]*len(bkg_losses) + [1]*len(losses)
+        y_score[signal_name] = bkg_losses + losses
+
+        fpr[signal_name], tpr[signal_name], _ = roc_curve(y_true[signal_name], y_score[signal_name])
+
+    for signal_name in tpr.keys():
+        
+        parts = signal_name.split("_")
+        label = f"$M_{{Z'}} = {parts[1]},  r_{{inv}} = 0.{parts[2].split('p')[1]}$"
+        rinv_value = f"0.{parts[2].split('p')[1]}"
+        m_z = parts[1]
+        plt.plot(fpr[signal_name], tpr[signal_name], color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], label=label)
+
+   
+    # Create dummy plots for separate legends
+    # Dummy plots for MZ values
+    legend_handles_mz = [plt.Line2D([0], [1], color=color, linewidth = 0.9,linestyle='-', label=f"$M_{{Z'}} = {m_z}$") for m_z, color in colors.items()]
+    # Dummy plots for rinv values
+    legend_handles_rinv = [plt.Line2D([0], [1], color='black',linewidth = 0.9, linestyle=linestyle, label=f"$r_{{inv}} = {rinv}$") for rinv, linestyle in line_styles.items()]
+
+    # Plot the  ROC curves
+
+    plt.axhline(y=1, color='gray', linestyle='--')
+
+    # Create the first legend for MZ values
+    first_legend = plt.legend(handles=legend_handles_mz, loc=[0.735,0.3])
+    ax = plt.gca().add_artist(first_legend)
+
+    plt.legend(handles=legend_handles_rinv, loc=[0.75,0.05])
+    plt.grid()
+
+    plt.xlabel("False positive rate")
+    plt.ylabel("True positive rate")
+
+    plt.savefig(output_dir)
