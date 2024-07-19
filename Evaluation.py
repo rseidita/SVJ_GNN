@@ -10,7 +10,7 @@ from utils.utils_training import get_model_parameters
 
 def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_idx):
         
-    base_directory_bkg = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/Bkg/"
+    base_directory_bkg = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/Bkg_sorted/"
     base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ_new/"
 
 
@@ -26,11 +26,18 @@ def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_id
         nLund_variables += 4
  
     # Create the model
+    # model = LundNet(
+    #     conv_params = [[32, 32], [32, 32], [64, 64], [64, 64], [128, 128], [128, 128]],
+    #     fc_params = [(128, 0.8)],
+    #     input_dims = nLund_variables,
+    #     add_fractions_to_lund=four_vectors
+    # )
+
     model = LundNet(
-        conv_params = [[32, 32], [32, 32], [64, 64], [64, 64], [128, 128], [128, 128]],
-        fc_params = [(128, 0.8)],
+        conv_params = [[128, 128], [128, 128], [64, 64], [64, 64], [32, 32], [32, 32]],
+        fc_params = [(32, 0.8)],
         input_dims = nLund_variables,
-        add_fractions_to_lund=four_vectors
+        add_fractions_to_lund = four_vectors
     )
 
     model.load_state_dict(dict["model_state_dict"])
@@ -54,7 +61,9 @@ def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_id
     et.plot_roc(roc, name, suffix)
     et.plot_scores(evaluation_dict, name, suffix)
     et.plot_sic(roc, name, suffix)
+    et.plot_sic_small(roc,name,suffix)
     et.plot_dnn(evaluation_dict, name, suffix)
+    et.plot_dnn_2(evaluation_dict, name, suffix)
 
     print(f"==> Evaluation completed in {time.time()-start_eva:.2f} seconds")
 

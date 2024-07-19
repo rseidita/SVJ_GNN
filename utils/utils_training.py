@@ -7,6 +7,7 @@ import uproot
 import pandas as pd
 
 
+
 def Normalize(base_directory_bkg, base_directory_signal, model_type):
     """Create means and stds for the normalization.
 
@@ -21,12 +22,25 @@ def Normalize(base_directory_bkg, base_directory_signal, model_type):
 
 
     bkg_directory = [
-        base_directory_bkg + "QCD_new",
+        base_directory_bkg + "QCD_new/QCD_HT300to500",
+        base_directory_bkg + "QCD_new/QCD_HT500to700",
+        base_directory_bkg + "QCD_new/QCD_HT700to1000", 
+        base_directory_bkg + "QCD_new/QCD_HT1000to1500", 
+        base_directory_bkg + "QCD_new/QCD_HT1500to2000", 
+        base_directory_bkg + "QCD_new/QCD_HT2000toInf",
+        
         base_directory_bkg + "TTJet",
         ]  
     
-    Bkg = {f"QCD_{model_type}" : None,
-           f"TTJet_{model_type}" : None,}
+    Bkg = {
+        f"QCD_HT300to500_{model_type}": None,
+        f"QCD_HT500to700_{model_type}": None,
+        f"QCD_HT700to1000_{model_type}" : None,
+        f"QCD_HT1000to1500_{model_type}" : None,
+        f"QCD_HT1500to2000_{model_type}" : None,
+        f"QCD_HT2000toInf_{model_type}" : None,
+
+        f"TTJet_{model_type}" : None,}
 
     signal_directory = [
         base_directory_signal + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak",
@@ -200,17 +214,17 @@ def save_loss(training_losses, validation_losses, name):
     # Iterate over each key in roc dictionary and plot the curves
     
     x_data = range(0,len(training_losses))
-    plt.plot(x_data, training_losses, color = '#457B9D', linewidth = 0.9, linestyle = "-", label="Training")
-    plt.plot(x_data, validation_losses,color = '#457B9D', linewidth = 0.9, linestyle = ":", label="Validation")
-   
+    plt.plot(x_data, training_losses, color = '#457B9D', linewidth = 0.9, linestyle = "-", label="Training Loss")
+    plt.plot(x_data, validation_losses,color = '#457B9D', linewidth = 0.9, linestyle = ":", label="Validation Loss")
+
     plt.xlabel("Epoch")
-    plt.ylabel("Loss")
+    plt.ylabel("BinaryCrossEntropy")
     plt.yscale("log")
     plt.legend()
 
     output_path = output_directory(name)
     outout_plot_name = name + "_loss.png"
-    plt.savefig(os.path.join(output_path,outout_plot_name), dpi = 1200)
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi = 200)
     plt.close()
     print(f"{outout_plot_name} has been saved.")
 

@@ -7,7 +7,7 @@ import numpy as np
 import re
 import pickle
 import os
-from itertools import chain
+import dcor
 
 from utils.utils_training import output_directory
 
@@ -79,58 +79,117 @@ def Evaluate_model(base_directory_bkg, base_directory_SVJ, model_type, eval_type
     ]
 
     datasets_bkg = [
-        [base_directory_bkg + "QCD_new", f"QCD_{model_type}"],
-        [base_directory_bkg + "TTJet", f"TTJet_{model_type}"],
+
+        [base_directory_bkg + "QCD_new/QCD_HT300to500", f"QCD_HT300to500_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD_new/QCD_HT500to700", f"QCD_HT500to700_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD_new/QCD_HT700to1000", f"QCD_HT700to1000_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD_new/QCD_HT1000to1500", f"QCD_HT1000to1500_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD_new/QCD_HT1500to2000", f"QCD_HT1500to2000_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD_new/QCD_HT2000toInf", f"QCD_HT2000toInf_{model_type}{eval_type}"],
+
+        [base_directory_bkg + "TTJet", f"TTJet_{model_type}{eval_type}"],
     ]
 
     evaluation_dict = {}
-    dataloader_qcd = GraphDataLoader(
-            [datasets_bkg[0]],
+
+    ## Run Bkg through network
+    weights_bkg = []
+    target_labels_bkg = []
+    test_scores_bkg = []
+    graph_label_bkg = []
+    mt_bkg = []
+    event_number_bkg = []
+
+    for dataset in datasets_bkg:
+        dataloader_bkg = GraphDataLoader(
+            [dataset],
             window_to_load=[window_to_load for _ in range(1)],
             batch_size=batch_size,
             normalizer=normalizer,
-            jet_idx=jet_idx,
-        )
-    dataloader_ttjet = GraphDataLoader(
-            [datasets_bkg[1]],
-            window_to_load=[window_to_load for _ in range(1)],
-            batch_size=batch_size,
-            normalizer=normalizer,
-            jet_idx=jet_idx,
-        )
-  
-     
+            jet_idx=jet_idx,)
+        
+        model.eval()
+
+        for graphs in dataloader_bkg:
+            weights_bkg.append(np.array(graphs.w))
+            mt_bkg.append(np.array(graphs.MT01FatJetMET))
+            event_number_bkg.append(np.array(graphs.event))
+            graphs = graphs.to(device)
+            target = graphs.y
+            out = model(graphs)
+            score = out[:,0].cpu()
+            target_labels_bkg.append(np.array(target.cpu()))
+            test_scores_bkg.append(score.detach().numpy())
+            graph_label_bkg.append([dataset[1]]*len(score.detach().numpy()))
+            
+        
+    weights_bkg =  np.concatenate(weights_bkg)
+    mt_bkg = np.concatenate(mt_bkg)
+    test_scores_bkg = np.concatenate(test_scores_bkg)
+    target_labels_bkg = np.concatenate(target_labels_bkg)
+    graph_label_bkg = np.concatenate(graph_label_bkg)   
+    event_number_bkg = np.concatenate(event_number_bkg)
+
+
+
+    # Run signal through network and safe it togheter with the bkg
     for dataset in datasets_signal:
+        weights_sig = []
+        target_labels_sig = []
+        test_scores_sig = []
+        graph_label_sig = []
+        mt_sig = []
+        event_number_sig = []
+
         dataloader_sig = GraphDataLoader(
             [dataset],
             window_to_load=[window_to_load for _ in range(1)],
             batch_size=batch_size,
             normalizer=normalizer,
-            jet_idx=jet_idx,
-        )
-
-
-        weights = []
-        target_labels = []
-        test_scores = []
-        
+            jet_idx=jet_idx,)
+    
         model.eval()
 
-
-        for graphs in chain(dataloader_qcd,dataloader_ttjet,dataloader_sig):
-            weights.append(np.array(graphs.w))
+        for graphs in dataloader_sig:
+            weights_sig.append(np.array(graphs.w))
+            mt_sig.append(np.array(graphs.MT01FatJetMET))
+            event_number_sig.append(np.array(graphs.event))
             graphs = graphs.to(device)
             target = graphs.y
             out = model(graphs)
             score = out[:,0].cpu()
-            target_labels.append(np.array(target.cpu()))
-            test_scores.append(score.detach().numpy())
+            target_labels_sig.append(np.array(target.cpu()))
+            test_scores_sig.append(score.detach().numpy())
+            graph_label_sig.append([dataset[1]]*len(score.detach().numpy()))
+
+        weights_sig =  np.concatenate(weights_sig)
+        mt_sig = np.concatenate(mt_sig)
+        test_scores_sig = np.concatenate(test_scores_sig)
+        target_labels_sig = np.concatenate(target_labels_sig)
+        graph_label_sig = np.concatenate(graph_label_sig)
+        event_number_sig = np.concatenate(event_number_sig)
+
+        weights = np.append(weights_sig, weights_bkg)
+        mt = np.append(mt_sig, mt_bkg)
+        test_scores = np.append(test_scores_sig, test_scores_bkg)
+        target_labels = np.append(target_labels_sig, target_labels_bkg)
+        graph_label = np.append(graph_label_sig, graph_label_bkg)
+        event_number = np.append(event_number_sig, event_number_bkg)
+
+        disco = dcor.distance_correlation(np.array(test_scores), np.array(mt))
+
+        print("DisCo = ", disco)
 
         evaluation_dict[dataset[1]] = {
-            'weights': np.concatenate(weights),
-            'target_labels': np.concatenate(target_labels),
-            'scores': np.concatenate(test_scores)
+            'weights': weights,
+            'target_labels': target_labels,
+            'scores': test_scores,
+            'mt': mt,
+            'dataset_labels':graph_label,
+            'disco': disco,
+            'event': event_number,
         }
+    
     
     return evaluation_dict
 
@@ -152,12 +211,16 @@ def roc_auc(evaluation_dict, name, suffix="eval"):
         target = evaluation_dict[key]["target_labels"]
         score  = evaluation_dict[key]["scores"]
         weights = evaluation_dict[key]["weights"]
+        mt = evaluation_dict[key]["mt"]
+        dataset_labels = evaluation_dict[key]["dataset_labels"]
+        disco = evaluation_dict[key]["disco"]
+        event = evaluation_dict[key]["event"]
 
         if np.all(target == 0) or np.all(target == 1):
             continue
 
-        fpr_, tpr_, thres_ = roc_curve(target, score)
-        auc_ = roc_auc_score(target, score)
+        fpr_, tpr_, thres_ = roc_curve(target, score, sample_weight=weights)
+        auc_ = roc_auc_score(target, score, sample_weight=weights)
 
         #calculate sic
         sic_ = np.zeros_like(tpr_, dtype=float)
@@ -171,7 +234,11 @@ def roc_auc(evaluation_dict, name, suffix="eval"):
             "target_labels": target,
             "scores": score,
             "weight": weights,
-            "sic": sic_
+            "sic": sic_,
+            "disco": disco,
+            "MT01FatJet": mt,
+            "dataset_labels": dataset_labels,
+            "event": event
             }
         
         roc[key] = {   
@@ -198,7 +265,7 @@ def make_dict(auc):
     Args:
         auc(dict): with keys SVJ_***_*p*
 
-    Returns:  auc(dict) with the form: {(Mz, rinv): 0.6106412792103517, ...
+    Returns:  auc(dict) with the form: {(rinv, mMed): 0.6106412792103517, ...
         
     """
     dict_result = {}
@@ -213,6 +280,25 @@ def make_dict(auc):
             dict_result[sig_key] = auc[key]
     return dict_result
 
+def add_legends_low(ax, legends, loc='lower right', spacing=0.26):
+    """
+    Add multiple legends to a Matplotlib axes.
+
+    Parameters:
+        ax: The axes to which legends are added.
+        legends: A list of legend handles, each a list of Line2D objects to be included in a legend.
+        loc: Location of the legends (default 'upper right').
+        spacing: Horizontal space between legends (default 0.1).
+    """
+    num_legends = len(legends)
+    base_anchor = (0.995, 0.005)
+
+    
+    for i, handles in enumerate(legends):
+        # Adjust the x-coordinate of the bbox_to_anchor for each legend
+        x_offset = base_anchor[0] - i * spacing
+        legend = ax.legend(handles=handles, loc=loc, bbox_to_anchor=(x_offset, base_anchor[1]))
+        ax.add_artist(legend)
 
 def plot_roc(roc, name, suffix = "_eval"):
 
@@ -258,15 +344,14 @@ def plot_roc(roc, name, suffix = "_eval"):
     plt.ylabel("True Positive Rate")
 
     # Create the first legend for MZ values
-    add_legends(ax,[legend_handles_mz,legend_handles_rinv])
+    add_legends_low(ax,[legend_handles_mz,legend_handles_rinv])
     plt.grid()
 
     output_path = output_directory(name)
     outout_plot_name = name + suffix + "_roc.png"
     print(f"{outout_plot_name} has been saved.")
-    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=400)
     plt.close()
-
 
 
 
@@ -322,19 +407,16 @@ def plot_auc(auc, name, suffix = "_eval",  variable_name = "AUC"):
     # Show value auc in each bin
     for idx_x, x in enumerate(x_list):
         for idx_y, y in enumerate(y_list):
-            plt.text(idx_x, idx_y, "{:.3f}".format(gridxy[idx_y][idx_x]), va='center', ha='center', color='white', fontsize=22)
-    
-    if (variable_name == "NormSignalCont"):
-        im.set_clim(0.001, 0.4)
-    if (variable_name == "AUC"):
-        im.set_clim(0.5, 1.0)
+            plt.text(idx_x, idx_y, "{:.3f}".format(gridxy[idx_y][idx_x]), va='center', ha='center', color='white', fontsize=18)
+  
+    im.set_clim(0.5, 1.0)
     cbar = plt.colorbar(im, fraction=0.046, pad=0.04)
     cbar.set_label(variable_name)
     
     plt.xticks(np.arange(len(x_list)), x_list)
     plt.yticks(np.arange(len(y_list)), y_list)
-    plt.ylabel("$r_{inv}$")
-    plt.xlabel("$M_{Z'}$")
+    plt.xlabel("$r_{inv}$")
+    plt.ylabel("$M_{Z'}$")
 
     #hep.cms.label('Preliminary', data=False)
     #hep.cms.label(loc=0)
@@ -342,7 +424,7 @@ def plot_auc(auc, name, suffix = "_eval",  variable_name = "AUC"):
     output_path = output_directory(name)
     outout_plot_name = name + suffix + "_auc.png"
     print(f"{outout_plot_name} has been saved.")
-    plt.savefig(os.path.join(output_path,outout_plot_name),  dpi=800)
+    plt.savefig(os.path.join(output_path,outout_plot_name),  dpi=400)
     plt.close()
     
     return 
@@ -403,14 +485,18 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
         m_z = parts[1]
         score_sig = []
         score_bkg = []
-        for label, score in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"]):
+        weights_sig = []
+        weights_bkg = []
+        for label, score,weights in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"], evaluation_dict[key]["weights"]):
             if label == 1:
                 score_sig.append(score)
+                weights_sig.append(weights)
             elif (qcd == True) & (label == 0):
                 score_bkg.append(score)
+                weights_bkg.append(weights)
         if qcd == True:
-            plt.hist(score_bkg,bins = 50 , color=colors["qcd"], linewidth = 0.9, linestyle='-', histtype = 'step', label="QCD")
-        plt.hist(score_sig,bins = 50 , color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], histtype = 'step', label=label)
+            plt.hist(score_bkg, weights=weights_bkg, bins = 50 , color=colors["qcd"], linewidth = 0.9, linestyle='-', histtype = 'step', label="Bkg")
+        plt.hist(score_sig, weights=weights_sig, bins = 50 , color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], histtype = 'step', label=label)
         qcd = False
 
     # Create dummy plots for separate legends
@@ -433,7 +519,7 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
 
     output_path = output_directory(name)
     outout_plot_name = name + suffix +"_score.png"
-    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=400)
     plt.close()
 
 
@@ -448,14 +534,18 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
         m_z = parts[1]
         score_sig = []
         score_bkg = []
-        for label, score in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"]):
+        weights_sig = []
+        weights_bkg = []
+        for label, score, weights in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"], evaluation_dict[key]["weights"]):
             if label == 1:
                 score_sig.append(score)
+                weights_sig.append(weights)
             elif (qcd == True) & (label == 0):
                 score_bkg.append(score)
+                weights_bkg.append(weights)
         if qcd == True:
-            plt.hist(score_bkg,bins = 50 , color=colors["qcd"],density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="QCD")
-        plt.hist(score_sig,bins = 50 , color=colors[m_z], density=True, linewidth = 0.9, linestyle=line_styles[rinv_value], histtype = 'step', label=label)
+            plt.hist(score_bkg, weights=weights_bkg, bins = 50 , density=True, color=colors["qcd"], linewidth = 0.9, linestyle='-', histtype = 'step', label="Bkg")
+        plt.hist(score_sig, weights=weights_sig, bins = 50 ,density=True, color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], histtype = 'step', label=label)
         qcd = False
 
     # Create dummy plots for separate legends
@@ -482,7 +572,7 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
 
     output_path = output_directory(name)
     outout_plot_name = name + suffix +"_score_normalized.png"
-    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=400)
     plt.close()
 
 def plot_dnn(evaluation_dict, name, suffix = "_eval"):
@@ -490,19 +580,24 @@ def plot_dnn(evaluation_dict, name, suffix = "_eval"):
     qcd = True
     score_sig = []
     score_bkg = []
+    weights_sig = []
+    weights_bkg = []
     for key in evaluation_dict:
 
-        for label, score in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"]):
+        for label, score, weights in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"], evaluation_dict[key]["weights"]):
             if label == 1:
                 score_sig.append(score)
+                weights_sig.append(weights)
             elif (qcd == True) & (label == 0):
                 score_bkg.append(score)
+                weights_bkg.append(weights)
         
         if qcd == True:
-            plt.hist(score_bkg,bins = 50 , color='#457B9D',stacked = True, density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="QCD")
+            plt.hist(score_bkg,weights=weights_bkg,bins = 50 , color='#457B9D', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="all Bkg")
         qcd = False
 
-    plt.hist(score_sig,bins = 50 , color='firebrick',stacked = True, density=True, linewidth = 0.9, linestyle='-', histtype = 'step', label="all Signals")
+    plt.hist(score_sig,weights=weights_sig,bins = 50 , color='firebrick', density=True, linewidth = 0.9, linestyle='-', histtype = 'step', label="all Signals")
+    
     plt.legend()
 
     # Plot the scores in a histogram
@@ -515,7 +610,55 @@ def plot_dnn(evaluation_dict, name, suffix = "_eval"):
 
     output_path = output_directory(name)
     outout_plot_name = name + suffix +"_DNN_Score.png"
-    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=400)
+    plt.close()
+
+def plot_dnn_2(evaluation_dict, name, suffix = "_eval"):
+    #Plot all signals vs Bkg ( TTjet and QCD singlely)
+
+    qcd = True
+    ttjet = True
+    score_sig = []
+    score_qcd = []
+    score_ttjet = []
+    weights_sig = []
+    weights_qcd = []
+    weights_ttjet = []
+    for key in evaluation_dict:
+
+        for label, score, dataset_label, weights in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"],evaluation_dict[key]["dataset_labels"], evaluation_dict[key]["weights"]):
+            if label == 1:
+                score_sig.append(score)
+                weights_sig.append(weights)
+            elif (qcd == True) & ("QCD" in dataset_label):
+                score_qcd.append(score)
+                weights_qcd.append(weights)
+            elif (ttjet == True) & ("TTJet" in dataset_label):
+                score_ttjet.append(score)
+                weights_ttjet.append(weights)
+        
+        if qcd == True:
+            plt.hist(score_qcd,weights=weights_qcd,bins = 50 , color='#457B9D', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="QCD")
+        qcd = False
+
+        if ttjet == True:
+            plt.hist(score_ttjet,weights=weights_ttjet,bins = 50 , color='#A8DADC', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="TTJet")
+        ttjet = False
+
+    plt.hist(score_sig,weights=weights_sig,bins = 50 , color='firebrick', density=True, linewidth = 0.9, linestyle='-', histtype = 'step', label="all Signals")
+    plt.legend()
+
+    # Plot the scores in a histogram
+    plt.xlabel("DNN Score")
+    plt.ylabel("Number of Graphs")
+
+
+    plt.grid()
+    plt.yscale('log')
+
+    output_path = output_directory(name)
+    outout_plot_name = name + suffix +"_DNN_Score_2.png"
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=400)
     plt.close()
 
 
@@ -595,7 +738,7 @@ def plot_sic(roc, name, suffix = "_eval"):
     # Plot the actual ROC curves
     plt.ylabel("SIC")
     plt.xlabel("True Positive Rate")
-    plt.ylim(0,6)
+    # plt.ylim(0,6)
     plt.axhline(y=1, color='gray', linestyle='--')
     #plt.yscale('log')
 
@@ -604,7 +747,7 @@ def plot_sic(roc, name, suffix = "_eval"):
 
     output_path = output_directory(name)
     outout_plot_name = name +suffix + "_SIC.png"
-    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=400)
     plt.close()
     print(f"{outout_plot_name} has been saved.")
 
@@ -664,7 +807,7 @@ def plot_sic_small(roc, name, suffix = "_eval"):
     # Plot the actual ROC curves
     plt.ylabel("SIC")
     plt.xlabel("True Positive Rate")
-    plt.ylim(0,3)
+    # plt.ylim(0,3)
     plt.axhline(y=1, color='gray', linestyle='--')
     #plt.yscale('log')
 
@@ -674,6 +817,6 @@ def plot_sic_small(roc, name, suffix = "_eval"):
 
     output_path = output_directory(name)
     outout_plot_name = name +suffix + "_SIC_small.png"
-    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=800)
+    plt.savefig(os.path.join(output_path,outout_plot_name), dpi=400)
     plt.close()
     print(f"{outout_plot_name} has been saved.")
