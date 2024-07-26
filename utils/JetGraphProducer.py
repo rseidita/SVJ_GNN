@@ -714,7 +714,7 @@ class JetGraphProducer(InMemoryDataset):
 
         return graphs
 
-    def get_graphs(self, file_name):
+    def get_graphs(self, file_name, gen_events_before_selection):
 
         # Check if xsec weights are requested
         if self.weights is None:
@@ -727,7 +727,10 @@ class JetGraphProducer(InMemoryDataset):
                     if "Metadata" in in_file:
                         if "GenCrossSection" in in_file["Metadata"].keys():
                             xsec = in_file["Metadata"]["GenCrossSection"].array()[0]
-                            gen_events_before_selection = in_file["CutFlow"]["Initial"].array()[0]
+                            if gen_events_before_selection != None:
+                                print("Weights are computed over the whole directory")
+                            else:
+                                gen_events_before_selection = in_file["CutFlow"]["Initial"].array()[0]
                         else:
                             raise ValueError("No GenCrossSection found in Metadata")
                     else:
@@ -742,7 +745,7 @@ class JetGraphProducer(InMemoryDataset):
                 "FatJetPFCands_jetIdx",
                 "FatJetPFCands_pFCandsIdx",
                 "nFatJet",
-                "genWeight",
+                #"genWeight",
                 "FatJet_eta",
                 "FatJet_phi",
                 "FatJet_pt",
@@ -811,9 +814,24 @@ class JetGraphProducer(InMemoryDataset):
     def process(self):
         # Read data into huge `Data` list.
         graphs = []
+
+        if len(self.raw_file_names) > 0:
+            gen_events_before_selection = 0
+            for file_name in self.raw_file_names:
+                with uproot.open(file_name) as in_file:
+                    if "Metadata" in in_file:
+                        if "GenCrossSection" in in_file["Metadata"].keys():
+                            gen_events_before_selection += in_file["CutFlow"]["Initial"].array()[0]
+                        else:
+                            raise ValueError("No GenCrossSection found in Metadata")
+                    else:
+                        raise ValueError("No Metadata tree found in file")
+        else:
+            gen_events_before_selection = None
+
         for file in self.raw_file_names:
             print(f"Processing {file}")
-            graphs += self.get_graphs(file)
+            graphs += self.get_graphs(file, gen_events_before_selection)
         
         data, slices = self.collate(graphs)
         torch.save((data, slices), self.processed_paths[-1])
