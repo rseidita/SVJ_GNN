@@ -756,8 +756,14 @@ class JetGraphProducer(InMemoryDataset):
             for obs in self.extra_obs_to_save_per_jet:
                 if obs not in branches_to_load: branches_to_load.append(obs)
 
-            with uproot.open(f"{file_name}:Events") as in_file:
-                events = in_file.arrays(branches_to_load, library="ak")
+            with uproot.open(file_name) as in_file:
+                is_file_empty = in_file["CutFlow"]["Final"].array()[0]
+                if is_file_empty > 0:
+                    events = in_file["Events"].arrays(branches_to_load, library="ak")
+                else:
+                    print(f"Skipping File {file_name} because it is empty")
+                    return None
+
 
         elif self.input_format == "TreeMaker2":
             branches_to_load = [
@@ -831,7 +837,9 @@ class JetGraphProducer(InMemoryDataset):
 
         for file in self.raw_file_names:
             print(f"Processing {file}")
-            graphs += self.get_graphs(file, gen_events_before_selection)
+            graphs_tmp = self.get_graphs(file, gen_events_before_selection)
+            if graphs_tmp != None:
+                graphs += self.get_graphs(file, gen_events_before_selection)
         
         data, slices = self.collate(graphs)
         torch.save((data, slices), self.processed_paths[-1])
