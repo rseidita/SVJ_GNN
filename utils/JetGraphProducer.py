@@ -759,7 +759,7 @@ class JetGraphProducer(InMemoryDataset):
             with uproot.open(file_name) as in_file:
                 is_file_empty = in_file["CutFlow"]["Final"].array()[0]
                 if is_file_empty > 0:
-                    events = in_file["Events"].arrays(branches_to_load, library="ak")
+                    events = in_file["events"].arrays(branches_to_load, library="ak")
                 else:
                     print(f"Skipping File {file_name} because it is empty")
                     return None
@@ -821,7 +821,7 @@ class JetGraphProducer(InMemoryDataset):
         # Read data into huge `Data` list.
         graphs = []
 
-        if len(self.raw_file_names) > 0:
+        if len(self.raw_file_names) > 1:
             gen_events_before_selection = 0
             for file_name in self.raw_file_names:
                 with uproot.open(file_name) as in_file:

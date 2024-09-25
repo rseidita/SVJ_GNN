@@ -83,5 +83,6 @@ class GraphDataLoader_tagger(DataLoader):
 
         data = ConcatDataset(datasets)
         weights = torch.cat(weights).to(device) if device is not None else torch.cat(weights)
+        # sampler = WeightedRandomSampler(weights, len(data), replacement=False)
 
-        super(GraphDataLoader_tagger, self).__init__(data, batch_size, shuffle, follow_batch, exclude_keys, **kwargs)
+        super(GraphDataLoader_tagger, self).__init__(data, batch_size, shuffle, follow_batch, exclude_keys,**kwargs)

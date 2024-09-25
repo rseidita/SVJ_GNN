@@ -22,14 +22,24 @@ def Normalize(base_directory_bkg, base_directory_signal, model_type):
 
 
     bkg_directory = [
-        base_directory_bkg + "QCD_new/QCD_HT300to500",
-        base_directory_bkg + "QCD_new/QCD_HT500to700",
-        base_directory_bkg + "QCD_new/QCD_HT700to1000", 
-        base_directory_bkg + "QCD_new/QCD_HT1000to1500", 
-        base_directory_bkg + "QCD_new/QCD_HT1500to2000", 
-        base_directory_bkg + "QCD_new/QCD_HT2000toInf",
+        base_directory_bkg + "QCD/QCD_HT300to500",
+        base_directory_bkg + "QCD/QCD_HT500to700",
+        base_directory_bkg + "QCD/QCD_HT700to1000", 
+        base_directory_bkg + "QCD/QCD_HT1000to1500", 
+        base_directory_bkg + "QCD/QCD_HT1500to2000", 
+        base_directory_bkg + "QCD/QCD_HT2000toInf",
         
         base_directory_bkg + "TTJet",
+
+        base_directory_bkg + "EW/WJets_inclusive",
+            
+        base_directory_bkg + "EW/ZJetsToNuNu_HT-100To200",
+        base_directory_bkg + "EW/ZJetsToNuNu_HT-200To400", 
+        base_directory_bkg + "EW/ZJetsToNuNu_HT-400To600", 
+        base_directory_bkg + "EW/ZJetsToNuNu_HT-600To800", 
+        base_directory_bkg + "EW/ZJetsToNuNu_HT-800To1200", 
+        base_directory_bkg + "EW/ZJetsToNuNu_HT-1200To2500", 
+        base_directory_bkg + "EW/ZJetsToNuNu_HT-2500ToInf", 
         ]  
     
     Bkg = {
@@ -40,7 +50,18 @@ def Normalize(base_directory_bkg, base_directory_signal, model_type):
         f"QCD_HT1500to2000_{model_type}" : None,
         f"QCD_HT2000toInf_{model_type}" : None,
 
-        f"TTJet_{model_type}" : None,}
+        f"TTJet_{model_type}" : None,
+
+        f"WJets_{model_type}": None,
+            
+        f"ZJetsToNuNu_HT-100To200_{model_type}": None,
+        f"ZJetsToNuNu_HT-200To400_{model_type}": None,
+        f"ZJetsToNuNu_HT-400To600_{model_type}": None,
+        f"ZJetsToNuNu_HT-600To800_{model_type}": None,
+        f"ZJetsToNuNu_HT-800To1200_{model_type}": None,
+        f"ZJetsToNuNu_HT-1200To2500_{model_type}": None,
+        f"ZJetsToNuNu_HT-2500ToInf_{model_type}": None,
+    }
 
     signal_directory = [
         base_directory_signal + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak",
@@ -255,19 +276,21 @@ def generate_name_with_versionnumber(base_name, directory):
 
 class early_stop:
     """Early stops the training if validation loss does not improve """
-    def __init__(self, patience=50, naverage = 5):
+    def __init__(self, patience=50, naverage = 10):
         self.patience = patience
         self.naverage = naverage
         self.counter = 0
         self.best_loss = 999 # start somewhere large
+        self.current_loss = 999
         self.early_stop = False
         self.best_epoch = 0
-        self.loss_dict = {f"{i}": None for i in range(0, 10)} # create dictionary s.t. I can put the last 10 validation losses in it
+        self.loss_dict = {f"{i}": None for i in range(0, naverage)} # create dictionary s.t. I can put the last 10 validation losses in it
         self.avg_loss = 999
     
     def __call__(self, validation_loss, model, epoch, output_path, name):
         if epoch == 0:
             self.best_loss = validation_loss
+        self.current_loss = validation_loss
         self.calculate_avg_val_loss(validation_loss,epoch)
         self.early_stopping(epoch, model, output_path, name)
 
@@ -278,21 +301,25 @@ class early_stop:
 
     # check whether early stopping is necessary
     def early_stopping(self, epoch, model, output_path, name):
-        if self.avg_loss > self.best_loss:
+        # if (self.avg_loss > self.best_loss) & (self.current_loss > self.best_loss):
+        if self.current_loss > self.best_loss:
             self.counter += 1
-            print(f"Avergae loss = {self.avg_loss} is larger than {self.best_loss}")
-            if self.counter >= self.patience:
+            print(f"Average loss = {self.avg_loss} and current loss = {self.current_loss} is larger than {self.best_loss}")
+            if self.counter > self.patience:
                 self.early_stop = True
                 print(f"==> Early stop because of overfitting")
                 print(f"Model saved for epoch {self.best_epoch}")
-        else:
-            self.best_loss = self.avg_loss
+        elif self.current_loss <= self.best_loss:
+            self.best_loss = self.current_loss
             self.counter = 0
             self.best_epoch = epoch
+            print("Saving new best model")
             torch.save({
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 }, os.path.join(output_path, name + ".pt"))
+        else:
+            self.counter = 0
 
 
 

@@ -80,14 +80,24 @@ def Evaluate_model(base_directory_bkg, base_directory_SVJ, model_type, eval_type
 
     datasets_bkg = [
 
-        [base_directory_bkg + "QCD_new/QCD_HT300to500", f"QCD_HT300to500_{model_type}{eval_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT500to700", f"QCD_HT500to700_{model_type}{eval_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT700to1000", f"QCD_HT700to1000_{model_type}{eval_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT1000to1500", f"QCD_HT1000to1500_{model_type}{eval_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT1500to2000", f"QCD_HT1500to2000_{model_type}{eval_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT2000toInf", f"QCD_HT2000toInf_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD/QCD_HT300to500", f"QCD_HT300to500_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD/QCD_HT500to700", f"QCD_HT500to700_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD/QCD_HT700to1000", f"QCD_HT700to1000_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD/QCD_HT1000to1500", f"QCD_HT1000to1500_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD/QCD_HT1500to2000", f"QCD_HT1500to2000_{model_type}{eval_type}"],
+        [base_directory_bkg + "QCD/QCD_HT2000toInf", f"QCD_HT2000toInf_{model_type}{eval_type}"],
 
         [base_directory_bkg + "TTJet", f"TTJet_{model_type}{eval_type}"],
+
+        [base_directory_bkg + "EW/WJets_inclusive",f"WJets_{model_type}{eval_type}"],
+            
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-100To200", f"ZJetsToNuNu_HT-100To200_{model_type}{eval_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-200To400", f"ZJetsToNuNu_HT-200To400_{model_type}{eval_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-400To600", f"ZJetsToNuNu_HT-400To600_{model_type}{eval_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-600To800", f"ZJetsToNuNu_HT-600To800_{model_type}{eval_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-800To1200", f"ZJetsToNuNu_HT-800To1200_{model_type}{eval_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-1200To2500", f"ZJetsToNuNu_HT-1200To2500_{model_type}{eval_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-2500ToInf", f"ZJetsToNuNu_HT-2500ToInf_{model_type}{eval_type}"],
     ]
 
     evaluation_dict = {}
@@ -219,8 +229,12 @@ def roc_auc(evaluation_dict, name, suffix="eval"):
         if np.all(target == 0) or np.all(target == 1):
             continue
 
-        fpr_, tpr_, thres_ = roc_curve(target, score, sample_weight=weights)
-        auc_ = roc_auc_score(target, score, sample_weight=weights)
+        # fpr_, tpr_, thres_ = roc_curve(target, score, sample_weight=weights)
+        # auc_ = roc_auc_score(target, score, sample_weight=weights)
+
+        # Already weighted by random weighted sampler!
+        fpr_, tpr_, thres_ = roc_curve(target, score)
+        auc_ = roc_auc_score(target, score)
 
         #calculate sic
         sic_ = np.zeros_like(tpr_, dtype=float)
@@ -495,8 +509,8 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
                 score_bkg.append(score)
                 weights_bkg.append(weights)
         if qcd == True:
-            plt.hist(score_bkg, weights=weights_bkg, bins = 50 , color=colors["qcd"], linewidth = 0.9, linestyle='-', histtype = 'step', label="Bkg")
-        plt.hist(score_sig, weights=weights_sig, bins = 50 , color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], histtype = 'step', label=label)
+            plt.hist(score_bkg, bins = 50 , color=colors["qcd"], linewidth = 0.9, linestyle='-', histtype = 'step', label="Bkg")
+        plt.hist(score_sig, bins = 50 , color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], histtype = 'step', label=label)
         qcd = False
 
     # Create dummy plots for separate legends
@@ -544,8 +558,8 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
                 score_bkg.append(score)
                 weights_bkg.append(weights)
         if qcd == True:
-            plt.hist(score_bkg, weights=weights_bkg, bins = 50 , density=True, color=colors["qcd"], linewidth = 0.9, linestyle='-', histtype = 'step', label="Bkg")
-        plt.hist(score_sig, weights=weights_sig, bins = 50 ,density=True, color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], histtype = 'step', label=label)
+            plt.hist(score_bkg,  bins = 50 , density=True, color=colors["qcd"], linewidth = 0.9, linestyle='-', histtype = 'step', label="Bkg")
+        plt.hist(score_sig, bins = 50 ,density=True, color=colors[m_z], linewidth = 0.9, linestyle=line_styles[rinv_value], histtype = 'step', label=label)
         qcd = False
 
     # Create dummy plots for separate legends
@@ -577,7 +591,7 @@ def plot_scores(evaluation_dict, name, suffix= "_eval"):
 
 def plot_dnn(evaluation_dict, name, suffix = "_eval"):
     #Plot all signals vs Bkg
-    qcd = True
+    bkg = True
     score_sig = []
     score_bkg = []
     weights_sig = []
@@ -588,20 +602,20 @@ def plot_dnn(evaluation_dict, name, suffix = "_eval"):
             if label == 1:
                 score_sig.append(score)
                 weights_sig.append(weights)
-            elif (qcd == True) & (label == 0):
+            elif (bkg == True) & (label == 0):
                 score_bkg.append(score)
                 weights_bkg.append(weights)
         
-        if qcd == True:
-            plt.hist(score_bkg,weights=weights_bkg,bins = 50 , color='#457B9D', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="all Bkg")
-        qcd = False
+        if bkg == True:
+            plt.hist(score_bkg,bins = 50 , color='#457B9D', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="all Bkg")
+        bkg = False
 
-    plt.hist(score_sig,weights=weights_sig,bins = 50 , color='firebrick', density=True, linewidth = 0.9, linestyle='-', histtype = 'step', label="all Signals")
+    plt.hist(score_sig,bins = 50 , color='firebrick', density=True, linewidth = 0.9, linestyle='-', histtype = 'step', label="all Signals")
     
     plt.legend()
 
     # Plot the scores in a histogram
-    plt.xlabel("DNN Score")
+    plt.xlabel("GNN Score")
     plt.ylabel("Number of Graphs")
 
 
@@ -618,12 +632,15 @@ def plot_dnn_2(evaluation_dict, name, suffix = "_eval"):
 
     qcd = True
     ttjet = True
+    ew = True
     score_sig = []
     score_qcd = []
     score_ttjet = []
+    score_ew = []
     weights_sig = []
     weights_qcd = []
     weights_ttjet = []
+    weights_ew = []
     for key in evaluation_dict:
 
         for label, score, dataset_label, weights in zip(evaluation_dict[key]["target_labels"], evaluation_dict[key]["scores"],evaluation_dict[key]["dataset_labels"], evaluation_dict[key]["weights"]):
@@ -636,20 +653,27 @@ def plot_dnn_2(evaluation_dict, name, suffix = "_eval"):
             elif (ttjet == True) & ("TTJet" in dataset_label):
                 score_ttjet.append(score)
                 weights_ttjet.append(weights)
+            elif (ew == True) & (("WJets" in dataset_label) or ("JetsToNuNu" in dataset_label)):
+                score_ew.append(score)
+                weights_ew.append(score)
         
         if qcd == True:
-            plt.hist(score_qcd,weights=weights_qcd,bins = 50 , color='#457B9D', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="QCD")
+            plt.hist(score_qcd,bins = 50 , color='#457B9D', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="QCD")
         qcd = False
 
         if ttjet == True:
-            plt.hist(score_ttjet,weights=weights_ttjet,bins = 50 , color='#A8DADC', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="TTJet")
+            plt.hist(score_ttjet,bins = 50 , color='#A8DADC', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="TTJet")
         ttjet = False
 
-    plt.hist(score_sig,weights=weights_sig,bins = 50 , color='firebrick', density=True, linewidth = 0.9, linestyle='-', histtype = 'step', label="all Signals")
+        if ew == True:
+            plt.hist(score_ew,bins = 50 , color='mediumaquamarine', density=True,  linewidth = 0.9, linestyle='-', histtype = 'step', label="EW")
+        ew = False
+
+    plt.hist(score_sig,bins = 50 , color='firebrick', density=True, linewidth = 0.9, linestyle='-', histtype = 'step', label="all Signals")
     plt.legend()
 
     # Plot the scores in a histogram
-    plt.xlabel("DNN Score")
+    plt.xlabel("GNN Score")
     plt.ylabel("Number of Graphs")
 
 
@@ -738,7 +762,7 @@ def plot_sic(roc, name, suffix = "_eval"):
     # Plot the actual ROC curves
     plt.ylabel("SIC")
     plt.xlabel("True Positive Rate")
-    # plt.ylim(0,6)
+    # plt.ylim(0,7)
     plt.axhline(y=1, color='gray', linestyle='--')
     #plt.yscale('log')
 
@@ -807,7 +831,7 @@ def plot_sic_small(roc, name, suffix = "_eval"):
     # Plot the actual ROC curves
     plt.ylabel("SIC")
     plt.xlabel("True Positive Rate")
-    # plt.ylim(0,3)
+    # plt.ylim(0,7)
     plt.axhline(y=1, color='gray', linestyle='--')
     #plt.yscale('log')
 

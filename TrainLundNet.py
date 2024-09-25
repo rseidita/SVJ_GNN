@@ -19,7 +19,7 @@ import mdmm
 
 
 def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx):
-    """Run everything.
+    """Train the model and evaluate it.
 
     Args:
         epochs(int): number of epochs to train for
@@ -29,41 +29,52 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
         model_type (str): Type of the model: LN3, LN3p, LN5, LN5+
         jet_idx(int): Which jet to look at (0,1,2), default = None -> look at all graphs in the window
 
-
     Returns: -
         
     """
 
     start = time.time()
 
+    ###--------- Prepare Model, Paths to input graphs  -----------------------------------------------------------
+
     # create output directory and get path to it
     output_path = utrain.output_directory(name)
 
     # Directory for the graphs
     base_directory_bkg = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/Bkg_sorted/"
-    base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ_new/"
+    base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ_26_08/"
 
     # create on the fly normalizer and save the mean and std 
     means, stds = utrain.Normalize(base_directory_bkg, base_directory_SVJ, model_type)
     normalizer = OnTheFlyNormalizer(["x"], means, stds)
-
     normalize_dict = {
         'means': means,
         'stds': stds}
-
+    
     with open(os.path.join(output_path, "Normalization.pkl"), 'wb') as f:
         pickle.dump(normalize_dict, f)
     print(f"Normalization saved in {os.path.join(output_path, 'Normalization.pkl')}")
 
+    # List: [paths to the "processed" directory containting the .pt files with the graph, name of the .pt file]
     datasets = [
-        [base_directory_bkg + "QCD_new/QCD_HT300to500", f"QCD_HT300to500_{model_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT500to700", f"QCD_HT500to700_{model_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT700to1000", f"QCD_HT700to1000_{model_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT1000to1500", f"QCD_HT1000to1500_{model_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT1500to2000", f"QCD_HT1500to2000_{model_type}"],
-        [base_directory_bkg + "QCD_new/QCD_HT2000toInf", f"QCD_HT2000toInf_{model_type}"],
+        [base_directory_bkg + "QCD/QCD_HT300to500", f"QCD_HT300to500_{model_type}"],
+        [base_directory_bkg + "QCD/QCD_HT500to700", f"QCD_HT500to700_{model_type}"],
+        [base_directory_bkg + "QCD/QCD_HT700to1000", f"QCD_HT700to1000_{model_type}"],
+        [base_directory_bkg + "QCD/QCD_HT1000to1500", f"QCD_HT1000to1500_{model_type}"],
+        [base_directory_bkg + "QCD/QCD_HT1500to2000", f"QCD_HT1500to2000_{model_type}"],
+        [base_directory_bkg + "QCD/QCD_HT2000toInf", f"QCD_HT2000toInf_{model_type}"],
 
         [base_directory_bkg + "TTJet", f"TTJet_{model_type}"],
+
+        [base_directory_bkg + "EW/WJets_inclusive",f"WJets_{model_type}"],
+            
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-100To200", f"ZJetsToNuNu_HT-100To200_{model_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-200To400", f"ZJetsToNuNu_HT-200To400_{model_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-400To600", f"ZJetsToNuNu_HT-400To600_{model_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-600To800", f"ZJetsToNuNu_HT-600To800_{model_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-800To1200", f"ZJetsToNuNu_HT-800To1200_{model_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-1200To2500", f"ZJetsToNuNu_HT-1200To2500_{model_type}"],
+        [base_directory_bkg + "EW/ZJetsToNuNu_HT-2500ToInf", f"ZJetsToNuNu_HT-2500ToInf_{model_type}"],
 
         [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.3_alpha-peak", f"SVJ_700_0p3_{model_type}"],
         [base_directory_SVJ + "SVJ_mMed-700GeV_mDark-20GeV_rinv-0.5_alpha-peak", f"SVJ_700_0p5_{model_type}"],
@@ -106,13 +117,29 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
         [base_directory_SVJ + "SVJ_mMed-3000GeV_mDark-20GeV_rinv-0.7_alpha-peak", f"SVJ_3000_0p7_{model_type}"],
     ]
 
-    # dfqcd = 0.4/6
-    # dfttjet = 0.1
+    ###--------- Prepare GraphDataLoader  -----------------------------------------------------------
+    ## Specify the datasetfractions to train on and then create the dataloader for signal and background for training and validation
+    
+    ## Datasetfractions to train on
+    # Background: 25% QCD, 12.5% TTJet, 12.5% EW ( 6.25%Z, 6.25%W)
+    # dfqcd = 0.25/6
+    # dfttjet = 0.25/2
+    # dfew = 0.25/4
+    # dfZ = dfew/7
+    # dfW = dfew
 
-    dfqcd = 0.5/6/2
-    dfttjet = 0.5/2
+    # Background: 16.7%% QCD, 16.7% TTJet, 16.7% EW ( 8.3%Z, 8.3%W)
+    dfbkg = 0.5/3
+    dfqcd = dfbkg/6
+    dfttjet = dfbkg
+    dfew = dfbkg/2
+    dfZ = dfew/7
+    dfW = dfew
+
+
+    # Signal: each hypothesis is 1.6% , in total 50% signal
     dfs = 0.5/30
-    df = [dfqcd]*6 + [dfttjet] + [dfs]*30 # Train on 25% qcd, 25% ttjet and 50% signal
+    df = [dfqcd]*6 + [dfttjet] + [dfW] + [dfZ]*7 + [dfs]*30 # Train on 50% background, and 50 % signal
 
     # Create the data loaders for training and validation
     dataloader_training = GraphDataLoader(
@@ -131,8 +158,10 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
         normalizer=normalizer,
     )
     
-    nLund_variables, energy_fractions, four_vectors = utrain.get_model_parameters(model_type)
+    ###--------- Create the Model -----------------------------------------------------------
 
+    # Input parameters for the Model
+    nLund_variables, energy_fractions, four_vectors = utrain.get_model_parameters(model_type)
     if energy_fractions:
         nLund_variables += 4
  
@@ -146,12 +175,17 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
 
     # Define the optimizer
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-    # Choose Device
+
+    # Load model on gpu if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+    
     # Define the loss
     loss_criterion = torch.nn.BCELoss()
-   
-    model = model.to(device)
+    
+
+
+    ###--------- Train the network -----------------------------------------------------------
 
     training_losses, validation_losses = train_and_validate(model, epochs, dataloader_training, dataloader_validation, loss_criterion, device, optimizer, name)
     print(f"==> Training completed in {time.time()-start:.2f} seconds")
@@ -160,12 +194,16 @@ def main(epochs, batch_size, learning_rate, name, model_type, eval_type, jet_idx
     utrain.save_loss(training_losses, validation_losses, name)
     
     print("Traininig finished")
+
+     ###--------- Evaluate the model -----------------------------------------------------------
+
     print("==> Evaluate Model...")
     start_eva = time.time()
-    # Run test set through model
+
+    # Run test dataset through model and save output in a dict 
     evaluation_dict = ueval.Evaluate_model(base_directory_bkg, base_directory_SVJ,model_type,eval_type, batch_size, normalizer, model, device, window_to_load=[0.7,1], jet_idx=None)
 
-      # compute roc and auc, safe them also in pickels
+    # Compute roc and auc, safe them also in pickels
     roc, auc = ueval.roc_auc(evaluation_dict, name)
     ueval.plot_auc(auc, name)
     ueval.plot_roc(roc, name)
@@ -213,12 +251,13 @@ def train_and_validate(model, epochs, dataloader_training, dataloader_validation
         batch_counter = 0
         loss_per_batch = 0
 
-        for batch, data in tqdm(enumerate(dataloader_training), total=len(dataloader_training), desc=f"Epoch {epoch+1}/{epochs}", leave=False):
+
+        for batch, data in enumerate(dataloader_training):
+        # for batch, data in tqdm(enumerate(dataloader_training), total=len(dataloader_training), desc=f"Epoch {epoch+1}/{epochs}", leave=False):
             model.train() # set into training modus for backpropagation
             data = data.to(device) # send data to vram of gpu!
             target = data.y # this is my label
             
-
             optimizer.zero_grad() #make sure gradients are empty
             out = model(data) # fill data into model and safe the output
             loss_ =  loss_criterion(out[:,0], target) # takes the first argument of the output(could also take the other)
@@ -357,6 +396,7 @@ if __name__ == "__main__":
         "learning_rate": learning_rate,
         "epochs": epochs,
         "Model" : model_type,
+        "remark": "fixed early stopping",
     }
 
     experiment.log_parameters(hyper_params)

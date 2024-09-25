@@ -11,7 +11,7 @@ from utils.utils_training import get_model_parameters
 def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_idx):
         
     base_directory_bkg = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/Bkg_sorted/"
-    base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ_new/"
+    base_directory_SVJ = "/pnfs/psi.ch/cms/trivcat/store/user/rhampp/forTraining/Preselection_applied/SVJ_26_08/"
 
 
     print("==> Evaluate Model...")
@@ -68,6 +68,7 @@ def main(name, suffix, batch_size, window_to_load, model_type, eval_type, jet_id
     print(f"==> Evaluation completed in {time.time()-start_eva:.2f} seconds")
 
 if __name__ == "__main__":
+
     parser = argparse.ArgumentParser()
 
     parser.add_argument(
