@@ -73,6 +73,7 @@ def get_lund_decomp(
         save_fractions:bool=False,
         n_lund_vars:int=3,
         save_4vectors:bool=False,
+        add_self_connections:bool=False,
         ):
     """
     Perform jet declustering, returning the Lund tree as a nested list
@@ -216,6 +217,15 @@ def get_lund_decomp(
             ], dtype=np.int64
             )
             edges = np.hstack((edges, new_edges))
+
+        if add_self_connections==True:
+            new_edges=np.array([
+                [k],
+                [k]
+            ], dtype=np.int64
+            )
+            edges=np.hstack((edges, new_edges))
+        
 
         # Update the index map
         index_list = [idx for l, idx in enumerate(index_list) if l not in (i,j)] + [k]
@@ -427,6 +437,7 @@ class JetGraphProducer(InMemoryDataset):
         verbose=False,
         input_format="PFNanoAOD",
         jet_collection="FatJet",
+        add_self_connections=False,
     ):
 
         self.root = root
@@ -459,6 +470,7 @@ class JetGraphProducer(InMemoryDataset):
         self.verbose = verbose
         self.input_format = input_format
         self.jet_collection = jet_collection
+        self.add_self_connections= add_self_connections
 
         assert self.weights in ["xsec", None], "Only xsec and None are supported for the weights argument (more to be added later)"
 
@@ -649,6 +661,7 @@ class JetGraphProducer(InMemoryDataset):
                         save_4vectors=self.save_4vectors_in_lund_tree,
                         fractions=energy_fractions,
                         save_fractions=self.save_energy_fractions,
+                        add_self_connections=self.add_self_connections,
                         )
 
                     feature_matrix, adjacency_matrix = ret
