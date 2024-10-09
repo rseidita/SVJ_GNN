@@ -22,9 +22,9 @@ damping = 5
 
 dropout=0.04
 
-from architectures.GraphAE import graphAE
+from architectures.GraphAE import graphAEBatchNorm
 
-model=graphAE(
+model=graphAEBatchNorm(
     num_features=num_features,
     architecture=(100,100,100,10),
     dropout=dropout,
