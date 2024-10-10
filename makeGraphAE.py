@@ -98,7 +98,7 @@ def train(config_data_loading, config_training_options, output_path):
     result, fpr, tpr, aucx = trainer.test()
 
 
-    plot_losses(training_losses, validation_losses, output_path, config_training_options.constraints_manager)
+    plot_losses(training_losses, validation_losses, output_path)
     plot_rocs(result, fpr, tpr, aucx, output_path)
 
 

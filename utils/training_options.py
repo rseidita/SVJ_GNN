@@ -22,10 +22,9 @@ scale=30
 
 damping=5
 
-from architectures.GraphAE import graphAE
-from utils.ConstraintManager import ConstraintsManager
+from architectures.GraphAE import graphAEBatchNorm
 
-model=graphAE(
+model=graphAEBatchNorm(
     num_features=num_features,
     architecture=(100,100,100,10),
     dropout=0.04,
@@ -44,8 +43,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Set number of threads
 torch.set_num_threads(12)
-
-from utils.ConstraintManager import MDMMConstraint
 
 learning_rate = 5e-3
 
@@ -71,6 +68,3 @@ edge_constraint = mdmm.MaxConstraint(
     scale=scale,
     damping=damping,
     )
-constraints_manager = ConstraintsManager(constraint_variables)
-constraints_manager.add_constraint(nodes_constraint)
-#constraints_manager.add_constraint(edges_constraint)

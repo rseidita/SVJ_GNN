@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-def plot_losses(training_losses, validation_losses, output_path, constraints_manager=None):
+def plot_losses(training_losses, validation_losses, output_path):
 
     if not os.path.exists(f"{output_path}/plots"):
         os.makedirs(f"{output_path}/plots")
@@ -15,15 +15,7 @@ def plot_losses(training_losses, validation_losses, output_path, constraints_man
     plt.savefig(f"{output_path}/plots/loss.pdf")
     plt.close()
 
-    if constraints_manager is not None:
-        for name in constraints_manager.get_constraint_names():
-            plt.plot(training_losses["constraints_losses"][name], label=f"Training {name}")
-            plt.plot( validation_losses["constraints_losses"][name], label=f"Validation {name}")
-            plt.xlabel("Epoch")
-            plt.ylabel("Loss")
-            plt.legend()
-            plt.savefig(f"{output_path}/plots/{name}.pdf")
-            plt.close()
+
 
 
 def plot_rocs(result, fpr, tpr, aucx, output_path):

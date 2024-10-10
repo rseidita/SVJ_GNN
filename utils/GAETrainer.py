@@ -41,14 +41,12 @@ class GAETrainer():
 
     def __make_mdmm_optimizer(self):
 
-        constraints_manager = self.training_config.constraints_manager
         mdmm_module=mdmm.MDMM([self.training_config.nodes_constraint])
-        #mdmm_module = mdmm.MDMM(constraints_manager.get_constraints())
         optimizer = mdmm_module.make_optimizer(self.model.parameters(), lr=self.training_config.learning_rate)
 
-        return mdmm_module, optimizer, constraints_manager
+        return mdmm_module, optimizer
     
-    def __train_batch(self, batch, mdmm_module, optimizer, constraints_manager=None):
+    def __train_batch(self, batch, mdmm_module, optimizer):
 
 
 
@@ -131,7 +129,7 @@ class GAETrainer():
     def train_and_validate(self, output_path):
 
 
-        mdmm_module, optimizer, constraints_manager =self.__make_mdmm_optimizer()
+        mdmm_module, optimizer =self.__make_mdmm_optimizer()
 
 
         train_loss_batch_def=[]
@@ -165,7 +163,7 @@ class GAETrainer():
         start= time.time()
         for epoch in range(epochsx):
             for batch in tqdm(self.loader_train, desc=f"Epoch{epoch}", leave=False):
-                loss_edges, loss_nodes = self.__train_batch( batch, mdmm_module, optimizer, constraints_manager)
+                loss_edges, loss_nodes = self.__train_batch( batch, mdmm_module, optimizer)
                 train_loss_batch.append((loss_edges+loss_nodes))
                 train_loss_batch_edges.append(loss_edges)
                 train_loss_batch_nodes.append((loss_nodes))
