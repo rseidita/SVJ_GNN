@@ -2,7 +2,6 @@ import importlib.util as imp
 import argparse
 import os
 from utils.GAETrainer import GAETrainer
-#from utils.GAEEvaluator import GAEEvaluator
 from utils.DataManager import TrainingDataManager
 from utils.plottingHelpers import plot_losses, plot_rocs
 

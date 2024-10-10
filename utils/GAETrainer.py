@@ -22,7 +22,6 @@ class GAETrainer():
         self.data_manager = data_manager
         self.training_config = training_config
         self.data_loading_config = data_loading_config
-        #self.training_variables = self.training_config.training_variables
 
 
         self.loader_train, self.loader_valid, self.loader_test_back, self.loader_signals = self.data_manager.loader(self.data_loading_config, self.training_config.batch_size)
@@ -59,8 +58,6 @@ class GAETrainer():
         edges_loss = self.model.edges_loss(
         x,
         edges,
-        # Negative sampling is important to also show the network
-        # examples of non-connected nodes
         batched_negative_sampling(
             edges,
             _batch,
@@ -75,19 +72,11 @@ class GAETrainer():
         optimizer.zero_grad()
         mdmm_return.value.backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-    #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)      #gradient clipping
-    #loss.backward()
+
         optimizer.step()
 
         with torch.no_grad():
              features_loss = self.model.features_loss(x, edges)
-
-    # with torch.no_grad():
-    #         edges_loss = model.edges_loss(
-    #             x,
-    #             edges,
-    #             torch.tensor(batched_negative_sampling(edges, _batch), dtype=torch.int64),
-    #         )
 
         return float(edges_loss.detach()), float(features_loss.detach())
 
@@ -107,8 +96,6 @@ class GAETrainer():
         edges_loss = self.model.edges_loss(
             x,
             edges,
-            #Negative sampling is important to also show the network
-            # examples of non-connected nodes
             negative_sampling(
                 edges,
             ).to(self.device),
@@ -116,7 +103,6 @@ class GAETrainer():
 
         features_loss = self.model.features_loss(x, edges)
 
-        #loss = edges_loss + features_loss
 
         return float(edges_loss.detach()), float(features_loss.detach())
     
@@ -157,9 +143,7 @@ class GAETrainer():
 
 
         epochsx=self.epochs
-        best_loss=0.0
-
-#torch.autograd.set_detect_anomaly(True)
+        
         start= time.time()
         for epoch in range(epochsx):
             for batch in tqdm(self.loader_train, desc=f"Epoch{epoch}", leave=False):
@@ -221,7 +205,7 @@ class GAETrainer():
 
         losses_testing_qcd = []
 
-        for graph in tqdm(self.loader_test_back, desc="Testing QCD", leave=True):
+        for graph in tqdm(self.loader_test_back, leave=True):
             x = graph.x
             edges = graph.edge_index
 
@@ -241,7 +225,7 @@ class GAETrainer():
         losses_testing_signal = {}
         for name, loader_signal in self.loader_signals.items():
             losses_testing_signal[name] = []
-            for graph in tqdm(loader_signal, desc="Testing SVJ", leave=True):
+            for graph in tqdm(loader_signal, leave=True):
                 x = graph.x
                 edges = graph.edge_index
 
@@ -272,11 +256,3 @@ class GAETrainer():
        
 
         return np.mean(list(aucx.values())), fpr, tpr, aucx
-
-
-
-
-
-
-        
-        

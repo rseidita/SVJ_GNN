@@ -20,6 +20,7 @@ class TrainingDataManager():
     - backgrounds: dictionary containing the information about the background samples
     - signals: dictionary containing the information about the signal samples
     - test_size: fraction of the data to be used for testing
+    - validation_size: fraction of the data to be used for validation
     - seed: seed for the random number generator
     - variables: list of variables to be used in the analysis
     - train_data: data used for training
@@ -50,26 +51,12 @@ class TrainingDataManager():
         self.test_size = data_loading_config.test_size
         self.validation_size=data_loading_config.validation_size
         self.variables = data_loading_config.variables
+        print(type(self.variables))
         self.batch_size=batch_size
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        #self.normalization_manager = data_loading_config.normalization_manager
-        #self.data, self.labels, self.weights, self.xs_weights = self._load_data()
-        
-        #np.random.seed(self.seed)
 
     def _load_data_from_files(self, sample_dict):
-        """
-        Load the data from the input files.
-
-        Args:
-        sample_dict (dict): dictionary containing the information about the samples
-
-        Returns:
-        data (pd.DataFrame): data for the training and testing sets
-        labels (np.array): labels for the training and testing sets
-        weights (np.array): weights for the training and testing sets
-        xs_weights (np.array): weights for the training and testing sets
-        """
+        
 
         data={}
         for sample_name, sample_info in sample_dict["samples"].items():
@@ -161,7 +148,6 @@ class TrainingDataManager():
                 ],
             ],
             window_to_load=[[1.0-self.test_size-self.validation_size, 1.0-self.test_size], [1.0-self.test_size-self.validation_size, 1.0-self.test_size]],
-            #batch_size=self.batch_size,
             normalizer=normalizerr,
             device=self.device,
         )
@@ -177,7 +163,6 @@ class TrainingDataManager():
                 ],
             ],
             window_to_load=[[1.0-self.test_size, 1.0], [1.0-self.test_size, 1.0]],
-            #batch_size=self.batch_size,
             normalizer=normalizerr,
             device=self.device,
         )
