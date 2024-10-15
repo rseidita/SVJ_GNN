@@ -1,13 +1,9 @@
 import sys
-import os
-import importlib.util as imp
 import torch
-import numpy as np
 sys.path.append('/t3home/aaguadob/graph_nets/')
 from SVJ_GNN.utils.JetGraphProducer import JetGraphProducer
 from LundTreeUtilities import OnTheFlyNormalizer
 from data_loading.graphDataLoader import GraphDataLoader
-import importlib
 
 
 
@@ -51,7 +47,6 @@ class TrainingDataManager():
         self.test_size = data_loading_config.test_size
         self.validation_size=data_loading_config.validation_size
         self.variables = data_loading_config.variables
-        print(type(self.variables))
         self.batch_size=batch_size
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
