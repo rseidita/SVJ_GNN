@@ -1,3 +1,3 @@
 #!/bin/bash
 
-python makeGraphAE.py --configuration utils --output /work/aaguadob/outputs/ 
+python utils/makeGraphAE.py --configuration configs --output /work/aaguadob/outputs/ 
