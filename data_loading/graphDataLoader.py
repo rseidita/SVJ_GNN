@@ -44,7 +44,7 @@ class GraphDataLoader(DataLoader):
             batch_size: int=1,
             dataset_fraction: List[float]=None,
             shuffle: bool = False,
-            permutation: Optional[dict] = {},
+            permutation: Optional[torch.Tensor] = None,
             follow_batch: Optional[List[str]] = None,
             exclude_keys: Optional[List[str]] = None,
             device: torch.device=None,
@@ -61,12 +61,6 @@ class GraphDataLoader(DataLoader):
         self.device = device
         self.jet_idx = jet_idx
 
-        # Consistency checks
-        assert len(self.window_to_load) == len(self.dataset_paths), "Please provide one slicing window per dataset!"
-        assert (not self.permutation) or (len(self.permutation) == len(self.dataset_paths)), \
-            "Mismatch between number of datasets and permutations, please check for consistency"
-        
-        
         datasets = []
         weights = []
         # Build the dataset
@@ -82,16 +76,15 @@ class GraphDataLoader(DataLoader):
                 data.data.to(self.device)
             
             if self.shuffle:
-                if name not in self.permutation.keys():
-                    self.permutation[name] = torch.randperm(len(data))
-                data = data[self.permutation[name]]
+                if self.permutation is None:
+                    self.permutation = torch.randperm(len(data))
+                data = data[self.permutation]
             
             data = data[int(self.window_to_load[i][0]*len(data)):int(self.window_to_load[i][1]*len(data))]
+            if self.jet_idx is not None:
+                data = data[data.Jet_idx == self.jet_idx]
             weights.append(data.w)
             
-            if self.jet_idx is not None:
-                data = data[data.jet_idx == self.jet_idx]
-
             if dataset_fraction is not None:
                 weights[i] = weights[i]*dataset_fraction[i]/np.sum(dataset_fraction)/weights[i].sum()
             

@@ -14,8 +14,8 @@ class LundNet(nn.Module):
             fc_params,
             input_dims = 3,
             use_fusion = True,
-            num_classes = 1,
-            add_fractions_to_lund = False,
+            num_classes = 2,
+            add_fractions_to_lund = True,
             ):
         super(LundNet, self).__init__()
 
@@ -85,5 +85,5 @@ class LundNet(nn.Module):
         #Global average pooling
         x = global_mean_pool(x, batch = data.batch) 
         x = self.fc(x)
-        x = torch.sigmoid(x)
+        x = torch.softmax(x, 1)
         return x
