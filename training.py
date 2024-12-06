@@ -15,12 +15,22 @@ import os
 from datetime import datetime
 import random
 import pickle
+import socket
 
 current_date = datetime.now().strftime("%m-%d_%H-%M")
 
 # If you run on the PSI cluster, limit the number of threads to 8
-torch.set_num_threads(8)
+# Get the current hostname
+hostname = socket.gethostname()
+print(hostname)
 
+# Define the condition to check if running on the PSI T3 cluster
+if "psi" in hostname.lower() or "t3" in hostname.lower():
+    torch.set_num_threads(8)
+    print("Running on PSI T3 cluster: limiting threads to 8")
+else:
+    print("Not running on PSI T3 cluster: using default thread settings")
+    
 ####################################################################################################
 # Import parameters from argparse
 # Setup Comet

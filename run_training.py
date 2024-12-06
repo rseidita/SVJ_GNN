@@ -74,8 +74,8 @@ for architecture in architectures:
     # Submit the script using sbatch
     #os.system(f"sbatch {script_filename}")
 
-    # Run the script in the background (on the PSI cluster)
-    os.system(f"nohup bash {script_filename} > log.log 2>&1 &")
+    # Run the script on the PSI cluster (particularly useful for testing purposes)
+    os.system(f"bash {script_filename}")
 
 
 
