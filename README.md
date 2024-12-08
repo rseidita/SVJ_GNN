@@ -40,6 +40,10 @@ Clone this repo:
 git clone git@github.com:rseidita/SVJ_GNN.git
 ```
 
+Install the Package Globally in the Environment: 
+Navigate to the directory containing `setup.py` and run `pip install -e .`
+
+
 ## Usage
 
 A complete example is given in the aptly named "example" notebook. Data loading and processing, model definition and training are covered.
