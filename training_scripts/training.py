@@ -1,10 +1,10 @@
 from comet_ml import Experiment
 import numpy as np
-from utils.JetGraphProducer import JetGraphProducer
-from utils.LundTreeUtilities import OnTheFlyNormalizer
+from svj_tools.utils.JetGraphProducer import JetGraphProducer
+from svj_tools.utils.LundTreeUtilities import OnTheFlyNormalizer
 import torch
-from data_loading.graphDataLoader import GraphDataLoader
-from architectures.GraphAE import graphAE
+from svj_tools.data_loading.graphDataLoader import GraphDataLoader
+from svj_tools.architectures.GraphAE import graphAE
 import time
 from tqdm import tqdm
 from torch_geometric.utils import batched_negative_sampling, negative_sampling
@@ -25,7 +25,7 @@ hostname = socket.gethostname()
 print(hostname)
 
 # Define the condition to check if running on the PSI T3 cluster
-if "psi" in hostname.lower() or "t3" in hostname.lower():
+if "t3ui03" in hostname.lower() or "t3ui02" in hostname.lower() or "t3ui01" in hostname.lower():
     torch.set_num_threads(8)
     print("Running on PSI T3 cluster: limiting threads to 8")
 else:

@@ -8,7 +8,7 @@ from tqdm import tqdm
 import vector
 import logging
 from torch_geometric.utils import negative_sampling
-from utils.LundTreeUtilities import tensor_to_tree, prune_tree, tree_to_tensor, get_lund_decomp
+from svj_tools.utils.LundTreeUtilities import tensor_to_tree, prune_tree, tree_to_tensor, get_lund_decomp
 
 class ScoreProducer:
 

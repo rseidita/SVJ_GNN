@@ -1,7 +1,7 @@
-from utils.JetGraphProducer import JetGraphProducer
+from svj_tools.utils.JetGraphProducer import JetGraphProducer
 from torch_geometric.loader import DataLoader
 from typing import Optional, List
-from utils.LundTreeUtilities import OnTheFlyNormalizer
+from svj_tools.utils.LundTreeUtilities import OnTheFlyNormalizer
 from torch.utils.data import ConcatDataset, WeightedRandomSampler
 import numpy as np
 import os

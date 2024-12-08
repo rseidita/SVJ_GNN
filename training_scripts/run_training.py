@@ -16,17 +16,17 @@ base_script = """#!/bin/bash
 #SBATCH --nodes=1                           # request to run job on single node                                       
 #SBATCH --ntasks=5                          # request 8 CPUs
 #SBATCH --mem=24000M                        # memory (per job)
-#SBATCH --time=00-24:00                     # time in format DD-HH:MM
-#SBATCH -o /t3home/ewiegers/logs/%x-%j.out  # Specify the output log file location
-#SBATCH -e /t3home/ewiegers/logs/%x-%j.err  # Specify the error log file location
+#SBATCH --time=00-00:15                     # time in format DD-HH:MM
+#SBATCH -o /t3home/ewiegers/SVJ_Test/SVJ_Test/logs/%x-%j.out  # Specify the output log file location
+#SBATCH -e /t3home/ewiegers/SVJ_Test/SVJ_Test/logs/%x-%j.err  # Specify the error log file location
 
 # Define variables
-epoch=1                                    # Fix number of epochs
+epoch=0                                    # Fix number of epochs
 batch_size=256                              #Fix batch size for training
 learning_rate=0.001                         # Fix learning rate
 nlund=5                                     # Fix number of Lund variables
 architecture="{architecture}"               # Architecture must be fixed below
-output_dir="/t3home/ewiegers/SVJ_GNN/Plots" # Output directory
+output_dir="/t3home/ewiegers/SVJ_Test/SVJ_Test" # Output directory
 alpha=0                                     # Weight of the feature loss during training
 test_alpha=0                                # Weight of the feature loss during testing
 
@@ -36,7 +36,7 @@ mkdir -p /scratch/$USER/${{SLURM_JOB_ID}}
 export TMPDIR=/scratch/$USER/${{SLURM_JOB_ID}}
 
 # Execute Python script with the variables passed as arguments
-python training.py --epoch $epoch \\
+python training_scripts/training.py --epoch $epoch \\
                    --batch_size $batch_size \\
                    --learning_rate $learning_rate \\
                    --nlund $nlund \\
@@ -50,7 +50,7 @@ rm -rf /scratch/$USER/${{SLURM_JOB_ID}}
 """
 
 # List of architectures (note that the format must be a string with spaces between the layer sizes)
-architectures = ["512 256 128 64 32 32"]
+architectures = ["1"]
 
 
 # Get current date and time for file naming (without seconds)
