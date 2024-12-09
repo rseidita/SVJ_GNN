@@ -67,9 +67,9 @@ hyperparams = {"epochs": args.epoch,
 
 # Create the Comet experiment
 experiment = Experiment(
-  api_key="HwVMyj07I6zmVlQTSXkzBqvsn",
-  project_name="Test",
-  workspace="wiegerinho"
+  api_key="",
+  project_name="",
+  workspace=""
 )
 
 experiment.log_parameters(hyperparams)
