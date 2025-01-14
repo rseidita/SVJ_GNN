@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 from torch_geometric.utils import batched_negative_sampling, negative_sampling, to_dense_adj
+import numpy as np
 import matplotlib.pyplot as plt
 import time
 from tqdm import tqdm
@@ -15,7 +16,7 @@ from sklearn.metrics import roc_auc_score, roc_curve
 torch.set_num_threads(8)
 
 # **Step 1: Generate graphs from signal data**
-signal_ggZH_ZToNuNu = JetGraphProducer(
+signal_ToNuNu_graph = JetGraphProducer(
     "/pnfs/psi.ch/cms/trivcat/store/user/ext-ebaldo/vh_bb_test_skims/2017/0_leptons_selection_Hbb_boosted/nominal/ggZH_HToBB_ZToNuNu/", 
     "ggZH_HToBB_ZToNuNu",
     n_store_jets=2,
@@ -28,7 +29,7 @@ signal_ggZH_ZToNuNu = JetGraphProducer(
     label=1,  # Label for signal graphs
 )
 
-signal_ggZH_ZToLL = JetGraphProducer(
+signal_ToLL_graph = JetGraphProducer(
     "/pnfs/psi.ch/cms/trivcat/store/user/ext-ebaldo/vh_bb_test_skims/2017/0_leptons_selection_Hbb_boosted/nominal/ggZH_HToBB_ZToLL/",
     "ggZH_HToBB_ZToLL",
     n_store_jets=2,
@@ -45,7 +46,7 @@ signal_ggZH_ZToLL = JetGraphProducer(
 background_datasets = [
     "WJetsToLNu_Pt-250To400",
     "WJetsToLNu_Pt-400To600",
-    #"WJetsToLNu_Pt-600ToInf"
+    "WJetsToLNu_Pt-600ToInf"
     #"Z1JetsToNuNu_M-50_LHEFilterPtZ-250To400",
     #"Z1JetsToNuNu_M-50_LHEFilterPtZ-50To150",
     #"Z2JetsToNuNu_M-50_LHEFilterPtZ-400ToInf",
@@ -73,52 +74,43 @@ for dataset in background_datasets:
     )
     background_graphs[dataset] = graph  
 
+# **Step 2: Compute normalization parameters (means and stds) for all datasets combined (background + signal)**
 
-# **Step 2: Compute normalization parameters (means and stds)**
+all_graphs = list(background_graphs.values()) + [signal_ToNuNu_graph, signal_ToLL_graph]
+
 means, stds = 0., 0.
 weights, counts = [], []
 
-print(background_datasets)
+# mean
+for graph in all_graphs:
+    for g in tqdm(graph, desc="Calculating means for all datasets"):
+        means += g.x.sum(dim=0) * g.w  # Somma ponderata delle caratteristiche
+        weights.append(g.w)
+        counts.append(g.num_nodes)
 
-# Compute means
-for dataset in background_datasets:
-    for graph in tqdm(background_graphs[dataset],desc=f"calculating means for {dataset}"):
-        means += graph.x.sum(dim=0) * graph.w
-        weights.append(graph.w)
-        counts.append(graph.num_nodes)
+# Normalize the sum by the total number of weighted nodes
+means /= sum(torch.tensor(weights) * torch.tensor(counts))
 
-    means /= sum(torch.tensor(weights) * torch.tensor(counts))
-
-print("means:")
+print("Combined means (background + signal):")
 print(means)
 
-# Compute stds
-for dataset in background_datasets:
-    for graph in background_graphs[dataset]:
-        stds += ((graph.x - means)**2).sum(dim=0) * graph.w
+# stds
+for graph in all_graphs:
+    for g in graph:
+        stds += ((g.x - means)**2).sum(dim=0) * g.w  # Differenze quadrate ponderate
 
-    stds /= sum(torch.tensor(weights) * torch.tensor(counts))
-    stds = torch.sqrt(stds)
+# Normalize the sum by the total number of weighted nodes
+stds /= sum(torch.tensor(weights) * torch.tensor(counts))
+stds = torch.sqrt(stds)
 
-# Initialize normalizer
+print("Combined stds (background + signal):")
+print(stds)
+
 normalizer = OnTheFlyNormalizer(["x"], means, stds)
 
 
+
 # **Step 3: Inspect the graph structure**
-# print(background_graphs["WJetsToLNu_Pt-250To400"][0])  # Print details of the first graph
-
-# print(background_graphs["WJetsToLNu_Pt-250To400"][0].x.shape)  # Print the shape of node features
-# print(background_graphs["WJetsToLNu_Pt-250To400"][0].x)        # Print the node features
-
-# # Print the adjacency matrix in dense format
-# print(to_dense_adj(background_graphs["WJetsToLNu_Pt-250To400"][0].edge_index))
-
-# # Print the sparse adjacency matrix
-# print(background_graphs["WJetsToLNu_Pt-250To400"][0].edge_index.shape)
-# print(background_graphs["WJetsToLNu_Pt-250To400"][0].edge_index)
-
-# # **Optional: Plot a Lund graph**
-# plot_tree(background_graphs["WJetsToLNu_Pt-250To400"][0], 4, "$p_T$", "myTree", show=True)
 
 
 # **Step 4: Load the data for training and testing**
@@ -127,38 +119,54 @@ background_data_pairs = [
     for dataset in background_datasets
 ]
 
+signal_data_pairs = [
+    [f"/pnfs/psi.ch/cms/trivcat/store/user/ext-ebaldo/vh_bb_test_skims/2017/0_leptons_selection_Hbb_boosted/nominal/ggZH_HToBB_ZToNuNu/", 
+     "ggZH_HToBB_ZToNuNu"],
+    [f"/pnfs/psi.ch/cms/trivcat/store/user/ext-ebaldo/vh_bb_test_skims/2017/0_leptons_selection_Hbb_boosted/nominal/ggZH_HToBB_ZToLL/", 
+     "ggZH_HToBB_ZToLL"]
+]
+
+all_data_pairs = background_data_pairs + signal_data_pairs
+
+signal_total_weight = (
+    signal_ToNuNu_graph.w.sum() +
+    signal_ToLL_graph.w.sum()
+)
+
+background_total_weight = sum(graph.w.sum() for graph in background_graphs.values())
+
+# Frazione totale (0.5 per segnali, 0.5 per background)
+dataset_fractions = []
+for graph in background_graphs.values():
+    dataset_fractions.append(0.5 * (graph.w.sum() / background_total_weight))  # Normalizzato per il background
+
+dataset_fractions.append(0.5 * (signal_ToNuNu_graph.w.sum() / signal_total_weight))  # Segnali
+dataset_fractions.append(0.5 * (signal_ToLL_graph.w.sum() / signal_total_weight))
+
+
 loader_training = GraphDataLoader(
-    background_data_pairs,
-    window_to_load=[[0., 0.7] for _ in range(len(background_data_pairs))],
+    all_data_pairs,
+    window_to_load=[[0., 0.7] for _ in range(len(all_data_pairs))],
     batch_size=64,
     normalizer=normalizer,
+    dataset_fraction=dataset_fractions,
 )
 
 loader_testing = GraphDataLoader(
-    background_data_pairs,
-    window_to_load=[[0.7, 1.] for _ in range(len(background_data_pairs))],
+    all_data_pairs,
+    window_to_load=[[0.7, 1.] for _ in range(len(all_data_pairs))],
     batch_size=64,
     normalizer=normalizer,
-)
-
-loader_signal = GraphDataLoader(
-    [
-        ["/pnfs/psi.ch/cms/trivcat/store/user/ext-ebaldo/vh_bb_test_skims/2017/0_leptons_selection_Hbb_boosted/nominal/ggZH_HToBB_ZToNuNu/", 
-         "ggZH_HToBB_ZToNuNu"],
-        ["/pnfs/psi.ch/cms/trivcat/store/user/ext-ebaldo/vh_bb_test_skims/2017/0_leptons_selection_Hbb_boosted/nominal/ggZH_HToBB_ZToLL/", 
-         "ggZH_HToBB_ZToLL"],
-    ],
-    window_to_load=[[0., 1.] for _ in range(2)],
-    batch_size=64,
-    normalizer=normalizer,
+    dataset_fraction=dataset_fractions,
 )
 
 
-# **Step 5: Initialize the LundNet autoencoder**
+# **Step 5: Initialize the LundNet 
 model = LundNet(
     input_dims=12,                    # Number of node features (input dimensions)
-    conv_params=[                    # Convolutional layers architecture
-        (12, 128),                   # Each tuple is a layer (input, output) dimensions
+    conv_params=[
+        (12, 256),                      # Convolutional layers architecture
+        (256, 128),
         (128, 64),
         (64, 32),
     ],
@@ -170,47 +178,15 @@ optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)  # Optimizer
 # **Step 6: Define the training function**
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-def train_on_batch(model, batch, optimizer, alpha=1.):
-    """
-    Train the model for one epoch.
+def train_on_batch(model, batch, optimizer, alpha):
 
-    Args:
-    - model (torch.nn.Module): the model to train
-    - batch (torch_geometric.data.Data): the batch of data
-    - optimizer (torch.optim.Optimizer): the optimizer to use
-    - alpha (float): the weight of the features loss in the total loss
+    model.train() #Training of the Network
 
-    Returns:
-    - float: the edges loss
-    - float: the features loss
-    """
-    model.train()
-
-    # print("batch")
-    # print(batch)
-
-    # print(f"Batch size (number of graphs): {batch.num_graphs}")
-    # print(f"Number of nodes in batch: {batch.x.size(0)}")
-    # print(f"Edge count in batch: {batch.edge_index.size(1)}")
-
-    # Extract data from the batch
-    # x = batch.x.to(device)
-    # edges = batch.edge_index.to(device)  #torch create edge_index according to the dataset 
     true_labels = batch.y.to(device)  # Ground truth labels for edges
-
-    # Predict logits for edges (output before applying sigmoid)
     logits = model(batch) 
-
-    # print(f"Logits shape: {logits.shape}, values: {logits}")
-    # print(f"True labels shape: {true_labels.shape}, values: {true_labels}")
-    
-    logits = logits.squeeze(-1)
-    
+    logits = logits.squeeze(-1) #remove a dimension to have the same size as true_labels
     # Compute Binary Cross Entropy Loss on edges
     loss = F.binary_cross_entropy_with_logits(logits, true_labels.float())
-
-    # features_loss = model.features_loss(x, edges)
-    # loss = edges_loss + alpha * features_loss
 
     optimizer.zero_grad()
     loss.backward()
@@ -218,65 +194,92 @@ def train_on_batch(model, batch, optimizer, alpha=1.):
 
     return float(loss.detach())
 
+def validate_on_batch(model, batch):
 
-# **Step 7: Train the model**
-losses, losses_edges, losses_nodes = [], [], []
-epochs, alpha = 1, 150  # Use more epochs for actual training
+    model.eval() # Validation
+
+    with torch.no_grad(): 
+        true_labels = batch.y.to(device)  
+        logits = model(batch)
+        logits = logits.squeeze(-1)
+        loss = F.binary_cross_entropy_with_logits(logits, true_labels.float())
+    return float(loss)
+
+
+# Step 7: Train the model
+epochs = 5
+alpha = 150  
+
+epoch_training_losses = []  
+epoch_validation_losses = []  
 
 start = time.time()
 for epoch in range(epochs):
-    for batch in tqdm(loader_training, desc=f"Epoch {epoch}", leave=False):
-        loss_edges = train_on_batch(model, batch, optimizer, alpha)
-        losses_edges.append(loss_edges)
+    # Training loop
+    batch_training_losses = [] 
+    for batch in tqdm(loader_training, desc=f"Epoch {epoch+1}/{epochs}", leave=False):
+        BCE_loss = train_on_batch(model, batch, optimizer, alpha)  
+        batch_training_losses.append(BCE_loss)  
+    
+    avg_training_loss = sum(batch_training_losses) / len(batch_training_losses)
+    epoch_training_losses.append(avg_training_loss)
+    
+    # Validation loop
+    batch_validation_losses = [] 
+    with torch.no_grad():  
+        for batch in loader_testing:
+            validation_loss = validate_on_batch(model, batch)  
+            batch_validation_losses.append(validation_loss)
+    
+    avg_validation_loss = sum(batch_validation_losses) / len(batch_validation_losses)
+    epoch_validation_losses.append(avg_validation_loss)
+    
+    # Print training and validation loss
+    print(f"Epoch {epoch+1}: Training loss = {avg_training_loss:.4f}, Validation loss = {avg_validation_loss:.4f}")
 
-print(f"--> Training completed in {time.time()-start:.2f} seconds")
+print(f"--> Training completed in {time.time()-start:.2f} seconds") 
 
-# Plot training losses
-plt.plot(losses_edges, label="Edges loss", marker="o")
+# Plot delle perdite rispetto al numero di epoche
+plt.plot(range(1, epochs+1), epoch_training_losses, label="Training Loss", marker="o")
+plt.plot(range(1, epochs+1), epoch_validation_losses, label="Validation Loss", marker="o")
 plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.yscale("log")
+plt.ylabel("Average Loss")
+plt.yscale("log") 
 plt.legend()
-plt.savefig("/t3home/ext-ebaldo/SVJ_GNN/output/Training_Loss.png")
+plt.savefig("/t3home/ext-ebaldo/SVJ_GNN/output/Epoch_5_Losses.png")
+
 
 
 # **Step 8: Evaluate the model**
 model.eval()
 
-losses_testing_background = []
+scores_testing_background = []
+scores_testing_signal = []
 
-for graph in tqdm(loader_testing, desc="Testing Background", leave=True):
-    x = graph.x
-    edges = graph.edge_index
+for graph in loader_testing:
+    logits = model(graph).squeeze(-1)
+    scores = torch.sigmoid(logits).detach().cpu().numpy()  # apply sigmoid to logits
+    labels = graph.y.cpu().numpy()  # 0 = background, 1 = signal
 
-    edges_loss = train_on_batch(model, graph, optimizer, alpha=1.)
+    # Separate the scores based on the labels
+    scores_testing_background.extend(scores[labels == 0]) 
+    scores_testing_signal.extend(scores[labels == 1])      
 
-    # features_loss = model.features_loss(x, edges)
-    # loss = edges_loss + alpha*features_loss
-
-    losses_testing_background.append(float(edges_loss))
-
-losses_testing_signal = []
-
-for graph in tqdm(loader_signal, desc="Testing Signal", leave=True):
-    x = graph.x
-    edges = graph.edge_index
-
-    edges_loss = train_on_batch(model, graph, optimizer, alpha=1.)
-
-    # features_loss = model.features_loss(x, edges)
-    # loss = edges_loss + alpha * features_loss
-
-    losses_testing_signal.append(float(edges_loss))
-
+all_scores = np.concatenate([scores_testing_signal, scores_testing_background])
+all_labels = np.concatenate([np.ones_like(scores_testing_signal), np.zeros_like(scores_testing_background)])
+roc_auc = roc_auc_score(all_labels, all_scores)
+print(f"ROC AUC: {roc_auc:.4f}") 
 
 # **Step 9: Plot the results**
-# Plot loss distributions
+
 plt.clf()
-plt.hist(losses_testing_signal, bins=50, histtype="step", label="Background", density=True)
-plt.hist(losses_testing_background, bins=50, histtype="step", label="Signal", density=True)
-plt.xlabel("Loss")
+plt.hist(scores_testing_signal, bins=50, histtype="step", label="Signal", density=True, color='blue')
+plt.hist(scores_testing_background, bins=50, histtype="step", label="Background", density=True, color='red')
+plt.xlabel("Score")
 plt.ylabel("Density")
 plt.legend()
-plt.savefig("/t3home/ext-ebaldo/SVJ_GNN/output/Loss_Distribution.png")
+plt.title("Score Distribution: Signal vs Background")
+plt.savefig("/t3home/ext-ebaldo/SVJ_GNN/output/Score_Distribution_epoch_5.png")
+
+
 
