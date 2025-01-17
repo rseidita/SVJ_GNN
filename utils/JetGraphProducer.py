@@ -24,7 +24,7 @@ class JetGraphProducer(InMemoryDataset):
     The graphs are stored in a pytorch geometric dataset and written to disk in a "processed" folder in the root file directory.
     
     Args:
-        root (str): Path to the folder with (one or more) root files containing the jet constituents. All files in the folder will be processed and treated as one sample.
+        root (str): Path to the folder or file containing the jet constituents. If folder, all files in the folder will be processed and treated as one sample.
         output_dataset_name (str): Name of the processed output dataset
         n_store_jets (int): Number of jets to store per event
         delta_r_threshold (float): Threshold for the deltaR distance between constituents to be considered connected (spacial graphs only)
@@ -151,7 +151,8 @@ class JetGraphProducer(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        return [self.root + "/" + f for f in os.listdir(self.root) if f.endswith(".root")]
+        if os.path.isdir(self.root): return [self.root + "/" + f for f in os.listdir(self.root) if f.endswith(".root")]
+        elif os.path.isfile(self.root): return [self.root]
 
     @property
     def processed_file_names(self):
