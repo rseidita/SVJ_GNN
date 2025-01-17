@@ -146,7 +146,7 @@ class JetGraphProducer(InMemoryDataset):
             logging.warning("Using approximation for initial number of events with max number of events")
 
         if os.path.isdir(root): super().__init__(root, transform, pre_transform, pre_filter)
-        elif os.path.isdir(root): super().__init__(os.path.dirname(root), transform, pre_transform, pre_filter)
+        elif os.path.isfile(root): super().__init__(os.path.dirname(root), transform, pre_transform, pre_filter)
 
         self.data, self.slices = torch.load(self.processed_paths[0])
 
