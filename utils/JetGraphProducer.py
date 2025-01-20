@@ -149,6 +149,7 @@ class JetGraphProducer(InMemoryDataset):
         elif os.path.isfile(root): super().__init__(os.path.dirname(root), transform, pre_transform, pre_filter)
 
         self.data, self.slices = torch.load(self.processed_paths[0])
+        self.root = root
 
     @property
     def raw_file_names(self):
@@ -513,5 +514,6 @@ class JetGraphProducer(InMemoryDataset):
             graphs += self.get_graphs(file)
         
         data, slices = self.collate(graphs)
+        if os.path.isfile(self.root): self.root = os.path.dirname(self.root)
         torch.save((data, slices), self.processed_paths[-1])
         
