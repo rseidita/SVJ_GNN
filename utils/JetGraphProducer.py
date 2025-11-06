@@ -93,7 +93,8 @@ class JetGraphProducer(InMemoryDataset):
         verbose=False,
         input_format="PFNanoAOD",
         jet_collection="FatJet",
-        use_displacement=False  
+        use_displacement=False,
+        compress=False,
     ):
 
         self.root = root
@@ -126,7 +127,8 @@ class JetGraphProducer(InMemoryDataset):
         self.verbose = verbose
         self.input_format = input_format
         self.jet_collection = jet_collection
-        self.use_displacement = use_displacement  
+        self.use_displacement = use_displacement
+        self.compress = compress
 
         assert self.weights in ["xsec", None], "Only xsec and None are supported for the weights argument (more to be added later)"
 
@@ -316,24 +318,24 @@ class JetGraphProducer(InMemoryDataset):
 
                         # Build the graph
                         graph = Data(
-                                x=features,
-                                edge_index=edge_index.t().contiguous(),
-                                edge_attr=edge_features,
+                                x=features.type(torch.float16) if self.compress else features,
+                                edge_index=edge_index.t().contiguous().type(torch.int32) if self.compress else edge_index.t().contiguous(),
+                                edge_attr=edge_features.type(torch.float16) if self.compress else edge_features,
                                 num_nodes=n_constituents,
                                 num_node_features=int(features.shape[1]),
                                 pos=pos,
-                                y=torch.Tensor([self.label])
+                                y=torch.Tensor([self.label]).type(torch.float32) if self.compress else torch.Tensor([self.label]),
                             )
 
                     else:
                         # Build the graph
                         graph = Data(
-                                x=features,
-                                edge_index=edge_index.t().contiguous(),
+                                x=features.type(torch.float16) if self.compress else features,
+                                edge_index=edge_index.t().contiguous().type(torch.int32) if self.compress else edge_index.t().contiguous(),
                                 num_nodes=n_constituents,
                                 num_node_features=int(features.shape[1]),
                                 pos=pos,
-                                y=torch.Tensor([self.label])
+                                y=torch.Tensor([self.label]).type(torch.float32) if self.compress else torch.Tensor([self.label]),
                             )
                     
                 else:
@@ -381,11 +383,11 @@ class JetGraphProducer(InMemoryDataset):
 
                     # Build the graph
                     graph = Data(
-                            x=features,                                   
-                            edge_index=torch.tensor(adjacency, dtype=torch.long),
+                            x=features.type(torch.float16) if self.compress else features,                                   
+                            edge_index=torch.tensor(adjacency, dtype=torch.long) if not self.compress else torch.tensor(adjacency, dtype=torch.int32),
                             num_nodes=len(features),                            
                             num_node_features=int(features.shape[1]),
-                            y=torch.Tensor([self.label])
+                            y=torch.Tensor([self.label]).type(torch.float32) if self.compress else torch.Tensor([self.label]),
                         )
                         
                 # Add the event weight
