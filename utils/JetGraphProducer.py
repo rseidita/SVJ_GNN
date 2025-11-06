@@ -324,7 +324,7 @@ class JetGraphProducer(InMemoryDataset):
                                 num_nodes=n_constituents,
                                 num_node_features=int(features.shape[1]),
                                 pos=pos,
-                                y=torch.Tensor([self.label]).type(torch.float32) if self.compress else torch.Tensor([self.label]),
+                                y=torch.Tensor([self.label]).type(torch.float16) if self.compress else torch.Tensor([self.label]),
                             )
 
                     else:
@@ -335,7 +335,7 @@ class JetGraphProducer(InMemoryDataset):
                                 num_nodes=n_constituents,
                                 num_node_features=int(features.shape[1]),
                                 pos=pos,
-                                y=torch.Tensor([self.label]).type(torch.float32) if self.compress else torch.Tensor([self.label]),
+                                y=torch.Tensor([self.label]).type(torch.float16) if self.compress else torch.Tensor([self.label]),
                             )
                     
                 else:
@@ -387,7 +387,7 @@ class JetGraphProducer(InMemoryDataset):
                             edge_index=torch.tensor(adjacency, dtype=torch.long) if not self.compress else torch.tensor(adjacency, dtype=torch.int32),
                             num_nodes=len(features),                            
                             num_node_features=int(features.shape[1]),
-                            y=torch.Tensor([self.label]).type(torch.float32) if self.compress else torch.Tensor([self.label]),
+                            y=torch.Tensor([self.label]).type(torch.float16) if self.compress else torch.Tensor([self.label]),
                         )
                         
                 # Add the event weight
