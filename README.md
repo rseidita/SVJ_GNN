@@ -9,7 +9,12 @@ This package eases the processing of hadronic jets stored in NTuples into graphs
 
 ## Installation
 
-Prepare your venv (exchange all instances of `mamba` with `conda` if that is your jam):
+If you are working on `lxplus` at CERN, you can use a compatible LCG envirionment. The one I used is:
+```
+source /cvmfs/sft.cern.ch/lcg/views/LCG_108_cuda/x86_64-el9-gcc13-opt/setup.sh
+```
+
+Otherwise, you can prepare your venv (exchange all instances of `mamba` with `conda` if that is your jam):
 ```
 mamba create -n gnn python=3.11
 mamba activate gnn
