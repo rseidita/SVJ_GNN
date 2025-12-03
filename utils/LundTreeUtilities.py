@@ -212,13 +212,10 @@ def get_lund_decomp(
         eta:np.ndarray,
         phi:np.ndarray,
         mass:np.ndarray,
-        d0:np.ndarray, 
-        dz:np.ndarray, 
         fractions:np.ndarray,
         save_fractions:bool=False,
         n_lund_vars:int=3,
-        save_4vectors:bool=False,
-        use_displacement:bool = False,
+        four_vectors:bool=False,
         ):
     """
     Perform jet declustering, returning the Lund tree as a nested list
@@ -262,10 +259,6 @@ def get_lund_decomp(
     nodes_eta = eta.astype(np.float64).copy()
     nodes_phi = phi.astype(np.float64).copy()
     nodes_mass = mass.astype(np.float64).copy()
-
-    #Displacement Features of constituents
-    nodes_d0 = d0.astype(np.float64).copy() 
-    nodes_dz = dz.astype(np.float64).copy() 
     
     # New Features of constituents
     nodes_Delta = np.zeros(len(nodes_pt), dtype=np.float64)
@@ -296,12 +289,6 @@ def get_lund_decomp(
         # Cluster the pair together
         new_constituent = cluster_constituents(constituents, i, j)
 
-        new_d0 = (nodes_d0[i] + nodes_d0[j])/2 
-        new_dz = (nodes_dz[i] + nodes_dz[j])/2 
-
-        nodes_d0 = np.append(nodes_d0, new_d0) 
-        nodes_dz = np.append(nodes_dz, new_dz) 
-
         nodes_pt = np.append(nodes_pt, new_constituent.pt)
         nodes_eta = np.append(nodes_eta, new_constituent.eta)
         nodes_phi = np.append(nodes_phi, new_constituent.phi)
@@ -321,14 +308,6 @@ def get_lund_decomp(
             constituents[2,j]
         )
         if np.isnan(Delta):
-            print("pt: ", constituents[0,i])
-            print("eta: ", constituents[1,i])
-            print("phi: ", constituents[2,i])
-            print("mass: ", constituents[3,i])
-            print("y_1", get_rapidity(constituents[0,i], constituents[1,i], constituents[3,i]))
-            print("y_2", get_rapidity(constituents[0,j], constituents[1,j], constituents[3,j]))
-            print(constituents[0,j], constituents[1,j], constituents[3,j])
-            print("Delta: ", Delta)
             raise ValueError("NaN in Delta")
         
         z = get_z(constituents[0,i], constituents[0,j])
@@ -406,209 +385,99 @@ def get_lund_decomp(
         constituents = np.stack((pt, eta, phi, mass), axis=0)
 
     # Somewhat cumbersome implementation needed for numba JIT compilation
-    if not save_4vectors and not save_fractions:
+    if not four_vectors and not save_fractions:
         if n_lund_vars == 3:
-            if use_displacement:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_d0,   
-                    nodes_dz,   
-                ))
-            else:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                ))
+            nodes = np.vstack((
+                nodes_kt,
+                nodes_Delta,
+                nodes_z,
+            ))
 
         elif n_lund_vars == 5:
-            if use_displacement:  
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_psi,
-                    nodes_mass,
-                    nodes_d0,   
-                    nodes_dz,   
-                ))
-            else:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_psi,
-                    nodes_mass,
-                ))
+            nodes = np.vstack((
+                nodes_kt,
+                nodes_Delta,
+                nodes_z,
+                nodes_psi,
+                nodes_mass,
+            ))
 
-    elif save_4vectors and not save_fractions:
+    elif four_vectors and not save_fractions:
         if n_lund_vars == 3:
-            if use_displacement:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_pt,
-                    nodes_eta,
-                    nodes_phi,
-                    nodes_mass,
-                    nodes_d0,   
-                    nodes_dz,   
-                ))
-            else:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_pt,
-                    nodes_eta,
-                    nodes_phi,
-                    nodes_mass,
-                ))
+            nodes = np.vstack((
+                nodes_kt,
+                nodes_Delta,
+                nodes_z,
+                nodes_pt,
+                nodes_eta,
+                nodes_phi,
+                nodes_mass,
+            ))
         elif n_lund_vars == 5:
-            if use_displacement:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_psi,
-                    nodes_pt,
-                    nodes_eta,
-                    nodes_phi,
-                    nodes_mass,
-                    nodes_d0,   
-                    nodes_dz,   
-                ))
-            else:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_psi,
-                    nodes_pt,
-                    nodes_eta,
-                    nodes_phi,
-                    nodes_mass,
-                ))
+            nodes = np.vstack((
+                nodes_kt,
+                nodes_Delta,
+                nodes_z,
+                nodes_psi,
+                nodes_pt,
+                nodes_eta,
+                nodes_phi,
+                nodes_mass,
+            ))
 
-    elif save_fractions and not save_4vectors:
+    elif save_fractions and not four_vectors:
         if n_lund_vars == 3:
-            if use_displacement:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    e_fraction,
-                    mu_fraction,
-                    g_fraction,
-                    h_fraction,
-                    nodes_d0,   
-                    nodes_dz,   
-                ))
-            else:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    e_fraction,
-                    mu_fraction,
-                    g_fraction,
-                    h_fraction,
-                ))
+            nodes = np.vstack((
+                nodes_kt,
+                nodes_Delta,
+                nodes_z,
+                e_fraction,
+                mu_fraction,
+                g_fraction,
+                h_fraction,
+            ))
         elif n_lund_vars == 5:
-            if use_displacement:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_psi,
-                    nodes_mass,
-                    e_fraction,
-                    mu_fraction,
-                    g_fraction,
-                    h_fraction,
-                    nodes_d0,   
-                    nodes_dz,   
-                ))
-            else:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_psi,
-                    nodes_mass,
-                    e_fraction,
-                    mu_fraction,
-                    g_fraction,
-                    h_fraction,
-                ))
+            nodes = np.vstack((
+                nodes_kt,
+                nodes_Delta,
+                nodes_z,
+                nodes_psi,
+                nodes_mass,
+                e_fraction,
+                mu_fraction,
+                g_fraction,
+                h_fraction,
+            ))
 
     else:
         if n_lund_vars == 3:
-            if use_displacement:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_pt,
-                    nodes_eta,
-                    nodes_phi,
-                    nodes_mass,
-                    e_fraction,
-                    mu_fraction,
-                    g_fraction,
-                    h_fraction,
-                    nodes_d0,   
-                    nodes_dz,   
-                ))
-            else:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_pt,
-                    nodes_eta,
-                    nodes_phi,
-                    nodes_mass,
-                    e_fraction,
-                    mu_fraction,
-                    g_fraction,
-                    h_fraction,
-                ))
+            nodes = np.vstack((
+                nodes_kt,
+                nodes_Delta,
+                nodes_z,
+                nodes_pt,
+                nodes_eta,
+                nodes_phi,
+                nodes_mass,
+                e_fraction,
+                mu_fraction,
+                g_fraction,
+                h_fraction,
+            ))
         elif n_lund_vars == 5:
-            if use_displacement:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_psi,
-                    nodes_pt,
-                    nodes_eta,
-                    nodes_phi,
-                    nodes_mass,
-                    e_fraction,
-                    mu_fraction,
-                    g_fraction,
-                    h_fraction,
-                    nodes_d0,   
-                    nodes_dz,   
-                ))
-            else:
-                nodes = np.vstack((
-                    nodes_kt,
-                    nodes_Delta,
-                    nodes_z,
-                    nodes_psi,
-                    nodes_pt,
-                    nodes_eta,
-                    nodes_phi,
-                    nodes_mass,
-                    e_fraction,
-                    mu_fraction,
-                    g_fraction,
-                    h_fraction,
-                ))
+            nodes = np.vstack((
+                nodes_kt,
+                nodes_Delta,
+                nodes_z,
+                nodes_psi,
+                nodes_pt,
+                nodes_eta,
+                nodes_phi,
+                nodes_mass,
+                e_fraction,
+                mu_fraction,
+                g_fraction,
+                h_fraction,
+            ))
 
     return (nodes, edges)
