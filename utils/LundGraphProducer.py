@@ -9,6 +9,7 @@ from tqdm import tqdm
 import vector
 import logging
 from utils.LundTreeUtilities import tensor_to_tree, prune_tree, tree_to_tensor, get_lund_decomp
+from os.path import abspath
 
 torch.serialization.add_safe_globals([torch_geometric.data.data.DataEdgeAttr])
 
@@ -22,7 +23,8 @@ class LundGraphProducer(InMemoryDataset):
 
     Args:
         dataset_folder (str): Path to the folder containing the root file(s).
-        output_dataset_name (str): Name of the output dataset file (without extension).
+        processed_dataset_name (str): Name of the output dataset file (without extension).
+        processed_dataset_path (str): Path to the folder where to save the processed dataset. If None, saves in a "processed" folder in the dataset folder.
         n_store_jets (int): Number of leading jets to store per event.
         max_events_per_file (int): Maximum number of events to process per file. If -1, process all events.
         pre_transform: Optional pre-transform to apply to each graph.
@@ -44,7 +46,9 @@ class LundGraphProducer(InMemoryDataset):
     def __init__(
         self,
         dataset_folder:str,
-        output_dataset_name:str,
+        processed_dataset_name:str,
+        processed_dataset_path:str=None,
+        regex_match:str=None,
         n_store_jets:int=2,
         max_events_per_file:int=-1,
         pre_transform=None,
@@ -65,7 +69,9 @@ class LundGraphProducer(InMemoryDataset):
     ):
 
         self.dataset_folder = dataset_folder
-        self.output_dataset_name = output_dataset_name
+        self.processed_dataset_name = processed_dataset_name
+        self.processed_dataset_path = os.path.abspath(processed_dataset_path) if processed_dataset_path is not None else None
+        self.regex_match = regex_match
         self.n_store_jets = n_store_jets
         self.max_events_per_file = max_events_per_file
         self.save_event_number = save_event_number
@@ -98,13 +104,22 @@ class LundGraphProducer(InMemoryDataset):
 
     @property
     def raw_file_names(self):
-        files = [os.path.abspath(os.path.join(self.dataset_folder, f)) for f in os.listdir(self.dataset_folder) if (f.endswith('.root') and not f.startswith('.'))]
+        files = [abspath(os.path.join(self.dataset_folder, f)) for f in os.listdir(self.dataset_folder) if (f.endswith('.root') and not f.startswith('.'))]
+        if self.regex_match is not None:
+            import re
+            pattern = re.compile(self.regex_match)
+            files = [f for f in files if pattern.search(os.path.basename(f))]
         return files
 
 
     @property
     def processed_file_names(self):
-        return [self.output_dataset_name + '.pt']
+        return [self.processed_dataset_name + '.pt']
+    
+
+    @property
+    def processed_dir(self):
+        return self.processed_dataset_path if self.processed_dataset_path is not None else os.path.join(self.dataset_folder, 'processed')
 
 
     def process_events(self, events):

@@ -1,4 +1,4 @@
-from utils.JetGraphProducer import JetGraphProducer
+from utils.LundGraphProducer import LundGraphProducer
 from torch_geometric.loader import DataLoader
 from typing import Optional, List
 from utils.LundTreeUtilities import OnTheFlyNormalizer
@@ -9,14 +9,15 @@ import torch
 
 class GraphDataLoader(DataLoader):
     """
-    A custom DataLoader for loading JetGraphProducer objects. It allows for the
+    A custom DataLoader for loading LundGraphProducer objects. It allows for the
     use of a normalizer to be applied to the data, and for the specification of
     a window of the data to be loaded. It also allows for the loading of multiple
     datasets at once, and concatenates them into a single dataset.
 
     Args:
         dataset_paths (List[List]): A list of lists, where each inner list contains
-            the path to the dataset and the name of the dataset to be loaded.
+            the path to the dataset and the name of the dataset to be loaded. Optionally,
+            a third element can be provided to specify the processed dataset path.
         normalizer (OnTheFlyNormalizer): A normalizer to be applied to the data.
         window_to_load (List[List[float]]): A list of lists, where each inner list
             contains the start and end of the window to be loaded. If None, the
@@ -35,7 +36,7 @@ class GraphDataLoader(DataLoader):
         **kwargs: Additional keyword arguments to be passed to the DataLoader.
 
     Returns:
-        DataLoader: A DataLoader object for loading JetGraphProducer objects.
+        DataLoader: A DataLoader object for loading LundGraphProducer objects.
     """
     def __init__(
             self,
@@ -72,13 +73,23 @@ class GraphDataLoader(DataLoader):
         datasets = []
         weights = []
         # Build the dataset
-        for i, (path, name) in enumerate(dataset_paths):
-            if not os.path.exists(f"{path}/processed/{name}.pt"):
+        for i, dataset_info in enumerate(dataset_paths):
+            path = dataset_info[0]
+            name = dataset_info[1]
+            processed_path = dataset_info[2] if len(dataset_info) > 2 else None
+            
+            # Determine the actual processed file path
+            if processed_path is not None:
+                expected_file = os.path.join(processed_path, f"{name}.pt")
+            else:
+                expected_file = os.path.join(path, "processed", f"{name}.pt")
+            
+            if not os.path.exists(expected_file):
                 raise FileNotFoundError(
-                    f"The requested dataset {path}/{name} has not been processed, "\
+                    f"The requested dataset {expected_file} has not been processed, "\
                     "please do so before attempting to load it."
                         )
-            data = JetGraphProducer(path, output_dataset_name=name)
+            data = LundGraphProducer(path, processed_dataset_name=name, processed_dataset_path=processed_path)
             
             if self.device is not None:
                 data.data.to(self.device)
@@ -89,7 +100,9 @@ class GraphDataLoader(DataLoader):
                 data = data[self.permutation[name]]
             
             data = data[int(self.window_to_load[i][0]*len(data)):int(self.window_to_load[i][1]*len(data))]
-            weights.append(data.w)
+            # FIXME: reintroduce when weights are back
+            # weights.append(data.w)
+            weights.append(torch.ones(len(data)))
             
             if self.jet_idx is not None:
                 data = data[data.jet_idx == self.jet_idx]
