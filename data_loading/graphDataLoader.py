@@ -2,11 +2,69 @@ from utils.JetGraphProducer import JetGraphProducer
 from torch_geometric.loader import DataLoader
 from typing import Optional, List
 from utils.LundTreeUtilities import OnTheFlyNormalizer
-from torch.utils.data import ConcatDataset, WeightedRandomSampler
+from torch.utils.data import ConcatDataset, Sampler
 import numpy as np
 import os
 import torch
 import warnings
+
+class ChunkSortedWeightedSampler(Sampler):
+    """Weighted random sampler that re-orders the drawn indices by on-disk
+    chunk so that each chunk file is opened once and fully consumed before
+    the next one is touched.  Statistically equivalent to
+    ``WeightedRandomSampler`` (same probability of drawing each sample) but
+    minimises redundant chunk-file I/O.
+
+    Args:
+        weights (Tensor): A 1-D tensor of per-sample sampling weights.
+        num_samples (int): Number of indices to draw per epoch.
+        datasets (list): The list of ``JetGraphProducer`` datasets whose
+            ``chunk_size`` attributes are used to compute sort keys.
+        replacement (bool): Whether to sample with replacement (default:
+            ``True``).
+
+    Note:
+        Within each epoch the sampler yields all samples from chunk 0 before
+        chunk 1, etc.  If mini-batch diversity matters, make sure the
+        DataLoader's ``batch_size`` is smaller than a single chunk.
+    """
+
+    def __init__(self, weights, num_samples, datasets, replacement=True):
+        self.weights = torch.as_tensor(weights, dtype=torch.double)
+        self.num_samples = num_samples
+        self.replacement = replacement
+
+        # Build a sort-key array: assign every position in the concatenated
+        # dataset an integer "chunk rank" so that all positions sharing the
+        # same on-disk chunk file get the same rank and ranks increase
+        # monotonically across chunks (and datasets).
+        sort_keys = []
+        chunk_rank = 0
+        for ds in datasets:
+            cs = getattr(ds, 'chunk_size', len(ds))
+            # ds.indices() returns range(len(ds)) for an unsliced dataset or
+            # a tensor of storage-level indices for a sliced/filtered one.
+            raw = ds.indices()
+            if isinstance(raw, torch.Tensor):
+                storage_indices = raw.to(dtype=torch.long)
+            else:
+                storage_indices = torch.arange(len(ds), dtype=torch.long)
+            local_chunk_ids = storage_indices // cs
+            sort_keys.append(local_chunk_ids + chunk_rank)
+            chunk_rank += int(local_chunk_ids.max().item()) + 1 if len(local_chunk_ids) else 0
+        self._sort_keys = torch.cat(sort_keys)
+
+    def __iter__(self):
+        # 1. Draw all indices for this epoch using the weighted scheme.
+        indices = torch.multinomial(self.weights, self.num_samples,
+                                    replacement=self.replacement)
+        # 2. Sort by chunk rank so the chunk cache is maximally effective.
+        order = torch.argsort(self._sort_keys[indices], stable=True)
+        return iter(indices[order].tolist())
+
+    def __len__(self):
+        return self.num_samples
+
 
 class GraphDataLoader(DataLoader):
     """
@@ -119,7 +177,7 @@ class GraphDataLoader(DataLoader):
 
         data = ConcatDataset(datasets)
         weights = torch.cat(weights).to(device) if device is not None else torch.cat(weights)
-        sampler = WeightedRandomSampler(weights, len(data), replacement=True) if sample else None
+        sampler = ChunkSortedWeightedSampler(weights, len(data), datasets) if sample else None
         batch_size = batch_size if batch_size > 0 else len(data)
 
         super(GraphDataLoader, self).__init__(data, batch_size, False, follow_batch, exclude_keys, sampler=sampler, **kwargs)
