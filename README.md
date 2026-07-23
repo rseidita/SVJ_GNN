@@ -180,31 +180,84 @@ regenerated.
 
 ## Loading datasets
 
-`GraphDataLoader` can combine processed datasets, select fractional windows,
-filter by jet index, normalize lazily, and perform weighted sampling:
+`GraphDataLoader` separates two concepts:
+
+1. A fixed permutation defines reproducible train/validation/test partitions.
+2. A sampling mode controls ordering within one selected partition.
+
+This makes it possible to mix detector periods before splitting while still
+reshuffling the training partition independently each epoch:
 
 ```python
+import torch
+
 from data_loading.graphDataLoader import GraphDataLoader
 
-loader = GraphDataLoader(
-    dataset_paths=[
-        ["data/", "qcd_lund"],
-        ["data/", "signal_lund"],
-    ],
-    window_to_load=[[0.0, 0.8], [0.0, 0.8]],
+paths = [
+    ["data/", "qcd_lund"],
+    ["data/", "signal_lund"],
+]
+
+train = GraphDataLoader(
+    dataset_paths=paths,
+    split_windows=[[0.0, 0.8], [0.0, 0.8]],
+    split_seed=12345,
+    sampling="weighted",
     batch_size=128,
-    sample=True,
-    shuffle=False,
 )
 
-for batch in loader:
+split_state = train.get_split_state()
+torch.save(split_state, "dataset_split.pt")
+
+validation = GraphDataLoader(
+    dataset_paths=paths,
+    split_windows=[[0.8, 0.9], [0.8, 0.9]],
+    split_state=split_state,
+    sampling="sequential",
+    batch_size=128,
+)
+
+test = GraphDataLoader(
+    dataset_paths=paths,
+    split_windows=[[0.9, 1.0], [0.9, 1.0]],
+    split_state=split_state,
+    sampling="sequential",
+    batch_size=128,
+)
+
+for batch in train:
     # Move batches to the accelerator in the training loop.
     batch = batch.to("cuda")
     ...
 ```
 
-Pass `sample=False` for sequential loading. If `jet_idx` filtering is needed,
-produce the dataset with `save_jet_idx=True`.
+To reproduce the split in another process:
+
+```python
+split_state = torch.load("dataset_split.pt", weights_only=False)
+```
+
+Split states contain path-qualified dataset keys, lengths, complete
+permutations, and metadata fingerprints. A split is rejected if the processed
+dataset has been regenerated or otherwise changed.
+
+Available sampling modes are:
+
+- `sampling="sequential"`: stable partition order.
+- `sampling="shuffle"`: reshuffle the selected partition every epoch.
+- `sampling="weighted"`: sample with replacement using saved event weights.
+
+Set `sampling_weights="uniform"` to use equal probabilities with weighted
+sampling. `dataset_fraction` can assign a target sampling fraction to each
+dataset; it is deliberately separate from the physics weights stored on each
+graph.
+
+Use `split_seed=None` when the original dataset order should be preserved.
+If `jet_idx` filtering is needed, produce the dataset with
+`save_jet_idx=True`.
+
+The older `window_to_load`, `permutation`, `shuffle`, and `sample` arguments
+remain available as deprecated compatibility aliases.
 
 ## Normalization
 

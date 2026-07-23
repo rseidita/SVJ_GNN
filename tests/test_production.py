@@ -133,6 +133,113 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(batch.num_graphs, 2)
         self.assertTrue(torch.equal(batch.jet_idx, torch.ones(2, dtype=torch.int)))
 
+    @staticmethod
+    def loader_identities(loader):
+        identities = []
+        for batch in loader:
+            identities.extend(zip(
+                batch.event_number.view(-1).tolist(),
+                batch.jet_idx.view(-1).tolist(),
+            ))
+        return identities
+
+    def test_reproducible_randomized_split_state(self):
+        self.producer("splits")
+        paths = [[str(self.root), "splits"]]
+        train = GraphDataLoader(
+            paths,
+            split_windows=[[0.0, 0.5]],
+            split_seed=1234,
+            sampling="sequential",
+            batch_size=2,
+        )
+        state = train.get_split_state()
+        validation = GraphDataLoader(
+            paths,
+            split_windows=[[0.5, 1.0]],
+            split_state=state,
+            sampling="sequential",
+            batch_size=2,
+        )
+        repeated_train = GraphDataLoader(
+            paths,
+            split_windows=[[0.0, 0.5]],
+            split_seed=1234,
+            sampling="sequential",
+            batch_size=2,
+        )
+
+        train_ids = self.loader_identities(train)
+        validation_ids = self.loader_identities(validation)
+        self.assertEqual(
+            train_ids, self.loader_identities(repeated_train)
+        )
+        self.assertTrue(set(train_ids).isdisjoint(validation_ids))
+        self.assertEqual(len(set(train_ids) | set(validation_ids)), 8)
+
+    def test_epoch_shuffle_is_independent_of_fixed_split(self):
+        self.producer("epoch_shuffle")
+        loader = GraphDataLoader(
+            [[str(self.root), "epoch_shuffle"]],
+            split_seed=4321,
+            sampling="shuffle",
+            generator=torch.Generator().manual_seed(99),
+            batch_size=2,
+        )
+        first_epoch = self.loader_identities(loader)
+        second_epoch = self.loader_identities(loader)
+        self.assertEqual(set(first_epoch), set(second_epoch))
+        self.assertNotEqual(first_epoch, second_epoch)
+
+    def test_stale_split_state_is_rejected(self):
+        self.producer("stale")
+        paths = [[str(self.root), "stale"]]
+        loader = GraphDataLoader(paths, split_seed=1)
+        state = loader.get_split_state()
+
+        metadata_file = self.root / "processed" / "stale_meta.pt"
+        metadata = torch.load(metadata_file, weights_only=False)
+        metadata["test_mutation"] = True
+        torch.save(metadata, metadata_file)
+
+        with self.assertRaisesRegex(
+            ValueError, "Processed metadata changed"
+        ):
+            GraphDataLoader(paths, split_state=state)
+
+    def test_loader_argument_validation(self):
+        self.producer("validation")
+        paths = [[str(self.root), "validation"]]
+        with self.assertRaisesRegex(ValueError, "Invalid split window"):
+            GraphDataLoader(paths, split_windows=[[0.8, 0.2]])
+        with self.assertRaisesRegex(
+            ValueError, "only meaningful with sampling='weighted'"
+        ):
+            GraphDataLoader(
+                paths,
+                sampling="sequential",
+                dataset_fraction=[1.0],
+            )
+        with self.assertRaisesRegex(ValueError, "sampling must be one of"):
+            GraphDataLoader(paths, sampling="randomish")
+
+    def test_dataset_fractions_control_sampling_mass(self):
+        self.producer("fraction_a")
+        self.producer("fraction_b")
+        loader = GraphDataLoader(
+            [
+                [str(self.root), "fraction_a"],
+                [str(self.root), "fraction_b"],
+            ],
+            sampling="weighted",
+            sampling_weights="uniform",
+            dataset_fraction=[1.0, 3.0],
+            batch_size=2,
+        )
+        weights = loader.sampler.weights
+        self.assertAlmostEqual(weights[:8].sum().item(), 0.25)
+        self.assertAlmostEqual(weights[8:].sum().item(), 0.75)
+
     def test_treemaker_is_explicitly_unsupported(self):
         with self.assertRaisesRegex(
             ValueError, "TreeMaker support has been removed"
