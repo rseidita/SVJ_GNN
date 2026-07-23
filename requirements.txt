@@ -1,0 +1,11 @@
+# Core graph production, loading, models, and plotting.
+numpy>=1.26,<2
+awkward>=2.6,<3
+uproot>=5,<6
+numba>=0.59,<1
+torch>=2.2,<3
+torch-geometric>=2.5,<3
+vector>=1.4,<2
+tqdm>=4.66,<5
+networkx>=3,<4
+matplotlib>=3.8,<4
