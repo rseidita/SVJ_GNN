@@ -99,7 +99,14 @@ class GraphDataLoader(DataLoader):
                         )
             # Pass the normalizer as a per-graph transform so it is applied
             # lazily at access time instead of requiring all data in RAM.
-            data = JetGraphProducer(path, output_dataset_name=name, transform=normalizer)
+            # The dataset name identifies an existing processed artifact here;
+            # its producer arguments are not being reconstructed by this loader.
+            data = JetGraphProducer(
+                path,
+                output_dataset_name=name,
+                transform=normalizer,
+                validate_cache_config=False,
+            )
             
             if self.shuffle:
                 if name not in self.permutation.keys():
@@ -107,18 +114,24 @@ class GraphDataLoader(DataLoader):
                 data = data[self.permutation[name]]
             
             data = data[int(self.window_to_load[i][0]*len(data)):int(self.window_to_load[i][1]*len(data))]
-            weights.append(data.w)
             
             if self.jet_idx is not None:
                 data = data[data.jet_idx == self.jet_idx]
 
+            data_weights = data.w
             if dataset_fraction is not None:
-                weights[i] = weights[i]*dataset_fraction[i]/np.sum(dataset_fraction)/weights[i].sum()
+                data_weights = (
+                    data_weights
+                    * dataset_fraction[i]
+                    / np.sum(dataset_fraction)
+                    / data_weights.sum()
+                )
 
+            weights.append(data_weights)
             datasets.append(data)
 
         data = ConcatDataset(datasets)
-        weights = torch.cat(weights).to(device) if device is not None else torch.cat(weights)
+        weights = torch.cat(weights)
         sampler = WeightedRandomSampler(weights, len(data), replacement=True) if sample else None
         batch_size = batch_size if batch_size > 0 else len(data)
 

@@ -1,17 +1,51 @@
 import collections
+import concurrent.futures
+import multiprocessing
 import os
-import numpy as np
+import pickle
 import uproot
 import torch
 from torch_geometric.data import Dataset, Data
-import awkward as ak
 from tqdm import tqdm
-import vector
 import logging
-from utils.LundTreeUtilities import tensor_to_tree, prune_tree, tree_to_tensor, get_lund_decomp
+from utils.GraphBuilder import (
+    GraphBuildConfig,
+    build_pfnano_jet_graph,
+    pfnano_branches,
+)
+
+
+_GRAPH_WORKER_PRODUCER = None
+
+
+def _initialize_graph_worker(producer):
+    """Install the producer once per worker and avoid nested CPU pools."""
+    global _GRAPH_WORKER_PRODUCER
+    _GRAPH_WORKER_PRODUCER = producer
+    _GRAPH_WORKER_PRODUCER._chunk_cache = collections.OrderedDict()
+    torch.set_num_threads(1)
+
+
+def _process_graph_entry_range(task):
+    """Worker entry point; task results are consumed in submission order."""
+    if _GRAPH_WORKER_PRODUCER is None:
+        raise RuntimeError("Graph worker was not initialized")
+    try:
+        graphs = _GRAPH_WORKER_PRODUCER._process_entry_range(*task)
+        # Returning tensors directly makes multiprocessing use torch's shared
+        # memory reducer. Explicit bytes work in containers without
+        # torch_shm_manager and avoid exhausting /dev/shm on large batches.
+        return pickle.dumps(graphs, protocol=pickle.HIGHEST_PROTOCOL)
+    except Exception as exc:
+        file_name, _, _, entry_start, entry_stop = task[:5]
+        raise RuntimeError(
+            f"Failed to process entries [{entry_start}, {entry_stop}) "
+            f"from '{file_name}'"
+        ) from exc
 
 
 class JetGraphProducer(Dataset):
+    _CONFIG_VERSION = 1
 
     """
     Produces graphs from a root file containing jet constituents.
@@ -52,16 +86,20 @@ class JetGraphProducer(Dataset):
         extra_obs_to_compute_per_event (list): List of extra event-level observables to compute and store in the graph (callable functions that take the event as input and return a float)
         extra_obs_to_load (list): List of extra observables to load from the root file (must be available in the root file)
         save_jet_idx (bool): Whether to save the jet index
-        mask (ak.Array): Mask to apply to the root file
         label (float): Label to add to the graph for supervised learning
         verbose (bool): Whether to print progress bars
-        input_format (str): Format of the input root files ["PFNanoAOD", "TreeMaker2"]
+        input_format (str): Input format. Only ``"PFNanoAOD"`` is supported.
         jet_collection (str): Name of the jet collection in the root file (default: "FatJet")
         use_displacement (bool): Whether to use the displacement features (d0, dz) in the Lund decomposition (Scouting Data has no displacement information)
-        chunk_size (int): Number of graphs to store per chunk file on disk (default: 1000).
+        graphs_per_chunk (int): Number of graphs stored per output chunk (default: 1000).
             Larger values reduce the number of files but increase per-chunk memory use.
         n_cached_chunks (int): Number of chunk files to keep in memory at once (default: 2).
             Increase for random-access workloads; decrease to save RAM.
+        num_workers (int): Number of graph-production worker processes. Values
+            greater than one enable multiprocessing (default: 1).
+        event_batch_size (int): Events assigned to each worker task.
+            Defaults to ``graphs_per_chunk``.
+        worker_prefetch (int): Maximum queued tasks per worker (default: 2).
 
     Note:
         Processed datasets are stored as a metadata file ``{name}_meta.pt`` and a set of
@@ -94,19 +132,25 @@ class JetGraphProducer(Dataset):
         save_energy_fractions=True,
         kt_cut=None,
         weights=None,
-        extra_obs_to_save_per_jet=[],
-        extra_obs_to_save_per_event=[],
-        extra_obs_to_compute_per_event:list[callable]=[],
-        extra_obs_to_load=[],
+        extra_obs_to_save_per_jet=None,
+        extra_obs_to_save_per_event=None,
+        extra_obs_to_compute_per_event=None,
+        extra_obs_to_load=None,
         save_jet_idx=False,
-        mask=None,
         label:float=0.,
         verbose=False,
         input_format="PFNanoAOD",
         jet_collection="FatJet",
         use_displacement=False,
-        chunk_size=1000,
+        graphs_per_chunk=None,
+        event_batch_size=None,
         n_cached_chunks=2,
+        validate_cache_config=True,
+        num_workers=1,
+        # Deprecated aliases retained for existing callers.
+        chunk_size=None,
+        processing_batch_size=None,
+        worker_prefetch=2,
     ):
 
         self.root = root
@@ -129,23 +173,62 @@ class JetGraphProducer(Dataset):
         self.save_energy_fractions = save_energy_fractions
         self.kt_cut = kt_cut
         self.weights = weights
-        self.extra_obs_to_save_per_jet = extra_obs_to_save_per_jet
-        self.extra_obs_to_save_per_event = extra_obs_to_save_per_event
-        self.extra_obs_to_compute_per_event = extra_obs_to_compute_per_event
-        self.extra_obs_to_load = extra_obs_to_load
+        self.extra_obs_to_save_per_jet = list(extra_obs_to_save_per_jet or [])
+        self.extra_obs_to_save_per_event = list(extra_obs_to_save_per_event or [])
+        self.extra_obs_to_compute_per_event = list(extra_obs_to_compute_per_event or [])
+        self.extra_obs_to_load = list(extra_obs_to_load or [])
         self.save_jet_idx = save_jet_idx
-        self.mask = mask
         self.label = label
         self.verbose = verbose
         self.input_format = input_format
         self.jet_collection = jet_collection
         self.use_displacement = use_displacement
-        self.chunk_size = chunk_size
+        if graphs_per_chunk is None:
+            graphs_per_chunk = 1000 if chunk_size is None else chunk_size
+        elif chunk_size is not None and chunk_size != graphs_per_chunk:
+            raise ValueError(
+                "graphs_per_chunk and deprecated chunk_size disagree"
+            )
+        if event_batch_size is None:
+            event_batch_size = (
+                processing_batch_size
+                if processing_batch_size is not None
+                else graphs_per_chunk
+            )
+        elif (
+            processing_batch_size is not None
+            and processing_batch_size != event_batch_size
+        ):
+            raise ValueError(
+                "event_batch_size and deprecated processing_batch_size disagree"
+            )
+        self.graphs_per_chunk = int(graphs_per_chunk)
+        self.event_batch_size = int(event_batch_size)
+        # Compatibility aliases for external code.
+        self.chunk_size = self.graphs_per_chunk
+        self.processing_batch_size = self.event_batch_size
         self._n_cached_chunks = n_cached_chunks
+        self.validate_cache_config = validate_cache_config
+        self.num_workers = int(num_workers)
+        self.worker_prefetch = int(worker_prefetch)
         # OrderedDict used as a bounded LRU cache: key = chunk index, value = list of graphs
         self._chunk_cache: collections.OrderedDict = collections.OrderedDict()
 
         assert self.weights in ["xsec", None], "Only xsec and None are supported for the weights argument (more to be added later)"
+        if self.num_workers < 1:
+            raise ValueError("num_workers must be at least 1")
+        if self.graphs_per_chunk < 1:
+            raise ValueError("graphs_per_chunk must be at least 1")
+        if self.event_batch_size < 1:
+            raise ValueError("event_batch_size must be at least 1")
+        if self.worker_prefetch < 1:
+            raise ValueError("worker_prefetch must be at least 1")
+
+        if input_format != "PFNanoAOD":
+            raise ValueError(
+                "Only input_format='PFNanoAOD' is supported; "
+                "TreeMaker support has been removed"
+            )
 
         # Assert that no incompatible flags are used
         if use_lund_decomp:
@@ -167,10 +250,103 @@ class JetGraphProducer(Dataset):
         # Load lightweight metadata from disk (weights, jet indices, total count).
         # No graph tensors are loaded here — those are fetched on-demand in get().
         meta_path = os.path.join(self.processed_dir, f"{self.output_dataset_name}_meta.pt")
-        meta = torch.load(meta_path)
+        meta = torch.load(meta_path, weights_only=False)
+        if self.validate_cache_config:
+            self._validate_processing_config(meta, meta_path)
+        # The on-disk layout must always come from metadata. This is
+        # particularly important for read-only loaders that intentionally do
+        # not reconstruct all producer arguments.
+        self.graphs_per_chunk = int(
+            meta.get("graphs_per_chunk", meta["chunk_size"])
+        )
+        self.chunk_size = self.graphs_per_chunk
         self._n_graphs: int = meta["n_graphs"]
         self._w: torch.Tensor = meta["w"]
         self._jet_idx_all: torch.Tensor = meta.get("jet_idx")
+
+    @staticmethod
+    def _callable_name(value):
+        """Return a stable, human-readable identifier for a callable."""
+        if value is None:
+            return None
+        module = getattr(value, "__module__", value.__class__.__module__)
+        name = getattr(
+            value,
+            "__qualname__",
+            getattr(value, "__name__", value.__class__.__qualname__),
+        )
+        return f"{module}.{name}"
+
+    def _processing_config(self):
+        """Configuration fields that affect the contents/layout of cached graphs."""
+        return {
+            "config_version": self._CONFIG_VERSION,
+            "n_store_jets": self.n_store_jets,
+            "n_store_cands": self.n_store_cands,
+            "delta_r_threshold": self.delta_r_threshold,
+            "max_events_to_process": self.max_events_to_process,
+            "use_delta_r_star": self.use_delta_r_star,
+            "use_delta_r_star_star": self.use_delta_r_star_star,
+            "pre_transform": self._callable_name(self.pre_transform),
+            "pre_filter": self._callable_name(self.pre_filter),
+            "use_relative_angles": self.use_relative_angles,
+            "use_dummy_values": self.use_dummy_values,
+            "save_edge_attributes": self.save_edge_attributes,
+            "save_n_constituents": self.save_n_constituents,
+            "save_event_number": self.save_event_number,
+            "use_lund_decomp": self.use_lund_decomp,
+            "n_lund_vars": self.n_lund_vars,
+            "save_4vectors_in_lund_tree": self.save_4vectors_in_lund_tree,
+            "save_energy_fractions": self.save_energy_fractions,
+            "kt_cut": self.kt_cut,
+            "weights": self.weights,
+            "extra_obs_to_save_per_jet": list(self.extra_obs_to_save_per_jet),
+            "extra_obs_to_save_per_event": list(self.extra_obs_to_save_per_event),
+            "extra_obs_to_compute_per_event": [
+                self._callable_name(value)
+                for value in self.extra_obs_to_compute_per_event
+            ],
+            "extra_obs_to_load": list(self.extra_obs_to_load),
+            "save_jet_idx": self.save_jet_idx,
+            # Retained as None for compatibility with PFNanoAOD caches written
+            # before obsolete TreeMaker mask support was removed.
+            "mask_sha256": None,
+            "label": self.label,
+            "input_format": self.input_format,
+            "jet_collection": self.jet_collection,
+            "use_displacement": self.use_displacement,
+            # get() uses this value to map global indices to chunk files.
+            "chunk_size": self.graphs_per_chunk,
+        }
+
+    def _validate_processing_config(self, meta, meta_path):
+        saved = meta.get("processing_config")
+        requested = self._processing_config()
+
+        if saved is None:
+            raise RuntimeError(
+                f"Cached dataset '{self.output_dataset_name}' at '{meta_path}' "
+                "was created without producer configuration metadata, so it "
+                "cannot be safely reused. Choose a new output_dataset_name or "
+                "remove this dataset's metadata and chunk files to reprocess it."
+            )
+
+        differing = {
+            key: (saved.get(key, "<missing>"), requested.get(key, "<missing>"))
+            for key in sorted(set(saved) | set(requested))
+            if saved.get(key, "<missing>") != requested.get(key, "<missing>")
+        }
+        if differing:
+            details = "\n".join(
+                f"  {key}: cached={old!r}, requested={new!r}"
+                for key, (old, new) in differing.items()
+            )
+            raise RuntimeError(
+                f"Cached dataset '{self.output_dataset_name}' was produced with "
+                f"incompatible settings:\n{details}\n"
+                "Choose a new output_dataset_name or remove this dataset's "
+                "metadata and chunk files to reprocess it."
+            )
 
     # ------------------------------------------------------------------
     # Properties that return per-sample values respecting the current
@@ -202,7 +378,11 @@ class JetGraphProducer(Dataset):
 
     @property
     def raw_file_names(self):
-        return [self.root + "/" + f for f in os.listdir(self.root) if f.endswith(".root")]
+        return [
+            os.path.join(self.root, name)
+            for name in sorted(os.listdir(self.root))
+            if name.endswith(".root")
+        ]
 
     @property
     def processed_file_names(self):
@@ -212,352 +392,137 @@ class JetGraphProducer(Dataset):
         return [f"{self.output_dataset_name}_meta.pt"]
     
     def get_total_initial_events(self):
-        if self.input_format == "PFNanoAOD":
-            n_initial = 0
-            for f in self.raw_file_names:
-                with uproot.open(f) as in_file:
-                    if "CutFlow" in in_file:
-                        n_initial += in_file["CutFlow"]["Initial"].array()[0]
-                    else:
-                        raise ValueError("No CutFlow tree found in file")
-            return n_initial
-        elif self.input_format == "TreeMaker2":
-            raise NotImplementedError("TreeMaker2 format not implemented yet")
-        else:
-            raise ValueError("Invalid input format. Must be either PFNanoAOD or TreeMaker2")
+        n_initial = 0
+        for file_name in self.raw_file_names:
+            with uproot.open(file_name) as input_file:
+                if "CutFlow" not in input_file:
+                    raise ValueError("No CutFlow tree found in file")
+                n_initial += input_file["CutFlow"]["Initial"].array(
+                    entry_stop=1
+                )[0]
+        return n_initial
 
-    def process_event(self, i_start, i_stop, events, xsec, gen_events_before_selection, total_events, events_to_process):
+    def _graph_build_config(self):
+        return GraphBuildConfig(
+            jet_collection=self.jet_collection,
+            n_store_cands=self.n_store_cands,
+            use_relative_angles=self.use_relative_angles,
+            use_displacement=self.use_displacement,
+            use_dummy_values=self.use_dummy_values,
+            use_lund_decomp=self.use_lund_decomp,
+            delta_r_threshold=self.delta_r_threshold,
+            save_edge_attributes=self.save_edge_attributes,
+            n_lund_vars=self.n_lund_vars,
+            save_4vectors_in_lund_tree=self.save_4vectors_in_lund_tree,
+            save_energy_fractions=self.save_energy_fractions,
+            kt_cut=self.kt_cut,
+            label=self.label,
+        )
 
+    def process_event(
+        self,
+        i_start,
+        i_stop,
+        events,
+        xsec,
+        gen_events_before_selection,
+        total_events,
+        events_to_process,
+        show_progress=None,
+    ):
         graphs = []
+        show_progress = self.verbose if show_progress is None else show_progress
+        config = self._graph_build_config()
 
-        for i_ev in tqdm(range(i_start, i_stop), disable=not self.verbose):
-            if self.input_format == "PFNanoAOD":
-                n_jets = min(self.n_store_jets, events.nFatJet[i_ev])
-            elif self.input_format == "TreeMaker2":
-                if events[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPt"][i_ev] is None:
+        for i_ev in tqdm(range(i_start, i_stop), disable=not show_progress):
+            event = events[i_ev]
+            n_jets = min(
+                self.n_store_jets,
+                int(event[f"n{self.jet_collection}"]),
+            )
+            for jet_index in range(n_jets):
+                graph, n_constituents = build_pfnano_jet_graph(
+                    event, jet_index, config
+                )
+                if graph is None:
+                    logging.warning(
+                        "Skipping event %s jet %s because it has no constituents",
+                        i_ev,
+                        jet_index,
+                    )
                     continue
-                n_jets = min(self.n_store_jets, len(events[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPt"][i_ev]))
-            for nj in range(n_jets):
-                event = events[i_ev]
-                if self.input_format == "PFNanoAOD":
-                    jet_pt = event[f"{self.jet_collection}_pt"][nj]
-                    jet_eta = event[f"{self.jet_collection}_eta"][nj]
-                    jet_phi = event[f"{self.jet_collection}_phi"][nj]
-                    pf_cands_matching_filter = event[f"{self.jet_collection}PFCands_pFCandsIdx"][event[f"{self.jet_collection}PFCands_jetIdx"] == nj].to_numpy().astype(np.int32)
-                    pt = event["PFCands_pt"][pf_cands_matching_filter]
-                    eta = event["PFCands_eta"][pf_cands_matching_filter]
-                    phi = event["PFCands_phi"][pf_cands_matching_filter]
-                    pdgId = event["PFCands_pdgId"][pf_cands_matching_filter]
-                    mass = event["PFCands_mass"][pf_cands_matching_filter]
-                    if self.use_displacement:
-                        d0 = event["PFCands_d0"][pf_cands_matching_filter]   
-                        dz = event["PFCands_dz"][pf_cands_matching_filter]  
-                    else:
-                        d0, dz = None, None 
-                    jet_idx = nj
-                elif self.input_format == "TreeMaker2":
-                    jet_pt = event[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPt"][nj]
-                    jet_eta = event[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fEta"][nj]
-                    jet_phi = event[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPhi"][nj]
-                    # In the TreeMaker2 format, we have to count how many constituents are matched to the first nj-1 jets
-                    n_constituents_prev = sum([
-                        event[f"{self.jet_collection}_constituentsIndexCounts"]
-                        for i in range(nj-1)
-                              ]) if nj > 0 else 0
-                    cands_idx = event[f"{self.jet_collection}_constituentsIndex"][
-                        n_constituents_prev:(n_constituents_prev + event[f"{self.jet_collection}_constituentsIndexCounts"][nj])
-                        ]
-                    pt = event["JetsConstituents/JetsConstituents.fCoordinates.fPt"][cands_idx]
-                    eta = event["JetsConstituents/JetsConstituents.fCoordinates.fEta"][cands_idx]
-                    phi = event["JetsConstituents/JetsConstituents.fCoordinates.fPhi"][cands_idx]
-                    energy = event["JetsConstituents/JetsConstituents.fCoordinates.fE"][cands_idx]
-                    mass = vector.array({"pt": pt, "eta": eta, "phi": phi, "E": energy}).mass
-                    pdgId = event["JetsConstituents_PdgId"][cands_idx]
 
-                # Order everything by pt and keep the desired number of candidates
-                permutation = ak.argsort(pt, ascending=False)
-                n_constituents = min(len(permutation), self.n_store_cands) if self.n_store_cands else len(permutation)
-                pt = np.array(pt[permutation][:n_constituents], dtype=np.float64)
-                eta = np.array(eta[permutation][:n_constituents], dtype=np.float64)
-                phi = np.array(phi[permutation][:n_constituents], dtype=np.float64)
-
-                if self.use_displacement:  
-                    d0 = np.array(d0[permutation][:n_constituents], dtype=np.float64)   
-                    dz = np.array(dz[permutation][:n_constituents], dtype=np.float64)   
-                else:
-                    d0 = np.zeros(len(pt), dtype=np.float64)   
-                    dz = np.zeros(len(pt), dtype=np.float64)   
-
-
-                if self.use_relative_angles:
-                    eta = eta - jet_eta
-                    # Need care to account for circularity
-                    phi = (phi - jet_phi + np.pi) % (2*np.pi) - np.pi
-                pdgId = np.array(pdgId[permutation][:n_constituents], dtype=np.int64)
-                # Clip masses to zero since for some reason sometimes they are slightly negative
-                mass = np.clip(np.array(mass[permutation][:n_constituents]), a_min=0., a_max=None, dtype=np.float64)
-
-                # If requested, use random values for features
-                if self.use_dummy_values:
-                    pt = np.random.random(size=(len(pt),))
-                    eta = np.random.random(size=(len(eta),))
-                    phi = np.random.random(size=(len(phi),))
-                    pdgId = np.random.random(size=(len(pdgId),))
-                    mass = np.random.random(size=(len(mass),))
-
-                if not self.use_lund_decomp:
-                    pos = [[e, p] for e, p in zip(eta, phi)]
-
-                    # Converting to np.array and subsequently to torch.tensor as suggested in torch docs for performance
-                    if self.use_displacement: 
-                        features = torch.tensor(np.array([
-                            pt,
-                            eta,
-                            phi,
-                            pdgId,
-                            mass,
-                            d0,   
-                            dz   
-                        ]).T, dtype=torch.float)
-                    else:
-                        features = torch.tensor(np.array([
-                            pt,
-                            eta,
-                            phi,
-                            pdgId,
-                            mass
-                        ]).T, dtype=torch.float)
-
-                    # Calculate edges and edge features
-                    matrix_eta = np.repeat(eta, len(eta)).reshape((len(eta), -1))
-                    matrix_phi = np.repeat(phi, len(phi)).reshape((len(phi), -1))
-                    matrix_pt = np.repeat(pt, len(pt)).reshape((len(pt), -1))
-                    matrix_mass = np.repeat(mass, len(mass)).reshape((len(mass), -1))
-                    delta_eta = matrix_eta - matrix_eta.T
-
-                    # Calculate delta phi accounting for circularity
-                    delta_phi_internal = np.abs(matrix_phi - matrix_phi.T)
-                    delta_phi_external = 2*np.pi - np.abs(matrix_phi - matrix_phi.T)
-                    delta_phi = np.minimum(delta_phi_internal, delta_phi_external)
-                    delta_R = np.sqrt(delta_eta**2 + delta_phi**2)
-                    adjacency = (delta_R < self.delta_r_threshold).astype(int)
-
-                    # If requested, substitute actual adjacency matrix with random values (to check for nconstituents dependency)
-                    if self.use_dummy_values:
-                        adjacency = np.random.binomial(1, 0.5, delta_R.shape)
-                        np.fill_diagonal(adjacency, 1)
-
-                    edge_connections = np.where( (adjacency - np.identity(adjacency.shape[0])) == 1)
-                    edge_index = torch.tensor([ edge for edge in zip(edge_connections[0], edge_connections[1]) ], dtype=torch.long)
-
-                    if self.save_edge_attributes:
-                        # Build pair-wise invariant masses
-                        lorentz_vectors = vector.array({"pt": matrix_pt, "eta": matrix_eta, "phi": matrix_phi, "mass": matrix_mass})
-                        pair_masses = (lorentz_vectors + lorentz_vectors.T).mass
-                        # Only keep connected edges and take log to squeeze the distribution
-                        pair_masses = np.clip(np.nan_to_num(np.log(pair_masses[edge_connections])), a_max=1e5, a_min=-1e5)
-
-                        # Build Cambridge-Aachen and kt distances between constituents
-                        R = 0.8
-                        d_ca = ((delta_R**2) / (R**2))[edge_connections]
-                        d_kt = (np.minimum(matrix_pt**2, matrix_pt.T**2) * (delta_R**2) / (R**2))[edge_connections]
-
-                        edge_features = torch.tensor(np.array([
-                            pair_masses,
-                            d_ca,
-                            d_kt,
-                        ]).T, dtype=torch.float)
-
-                        # Build the graph
-                        graph = Data(
-                                x=features,
-                                edge_index=edge_index.t().contiguous(),
-                                edge_attr=edge_features,
-                                num_nodes=n_constituents,
-                                num_node_features=int(features.shape[1]),
-                                pos=pos,
-                                y=torch.Tensor([self.label])
-                            )
-
-                    else:
-                        # Build the graph
-                        graph = Data(
-                                x=features,
-                                edge_index=edge_index.t().contiguous(),
-                                num_nodes=n_constituents,
-                                num_node_features=int(features.shape[1]),
-                                pos=pos,
-                                y=torch.Tensor([self.label])
-                            )
-                    
-                else:
-                    # Initialize energy fractions
-                    energy_fractions = np.array([
-                        1.*(np.abs(pdgId) == 11), # electrons
-                        1.*(np.abs(pdgId) == 13), # muons
-                        1.*(pdgId == 22), # photons
-                        1.*((np.abs(pdgId) != 11) & \
-                            (np.abs(pdgId) != 13) & \
-                            (np.abs(pdgId) != 22)), # hadrons
-                    ])
-  
-                    # Get lund decomposition
-                    ret = get_lund_decomp(
-                        pt,
-                        eta,
-                        phi,
-                        mass,
-                        d0,   
-                        dz,   
-                        n_lund_vars=self.n_lund_vars,
-                        save_4vectors=self.save_4vectors_in_lund_tree,
-                        fractions=energy_fractions,
-                        save_fractions=self.save_energy_fractions,
-                        use_displacement=self.use_displacement  
-                        )
-
-                    feature_matrix, adjacency_matrix = ret
-
-                    # Pass features to torch tensor
-                    features = torch.tensor(np.array(feature_matrix).T, dtype=torch.float)
-                        
-                    # Initialize adjacency matrix
-                    adjacency = torch.tensor(np.array(adjacency_matrix))
-
-                    if self.kt_cut is not None:
-                        # Convert to tree representation
-                        root_node = tensor_to_tree(features, adjacency)
-                        # Prune the tree
-                        root_node, n_nodes = prune_tree(root_node, 0, self.kt_cut)
-                        # Convert back to tensor representation
-                        features, adjacency = tree_to_tensor(root_node, (n_nodes, features.shape[1]))
-                        # TODO: deal with 1-node or empty graphs after pruning
-
-                    # Build the graph
-                    graph = Data(
-                            x=features,                                   
-                            edge_index=torch.tensor(adjacency, dtype=torch.long),
-                            num_nodes=len(features),                            
-                            num_node_features=int(features.shape[1]),
-                            y=torch.Tensor([self.label])
-                        )
-                        
-                # Add the event weight
                 if self.weights == "xsec":
-                    if self.input_format == "PFNanoAOD":
-                        if not self.max_events_to_process:
-                            graph.w = torch.tensor([xsec/gen_events_before_selection], dtype=torch.float)
-                        else:
-                            graph.w = torch.tensor([xsec/(gen_events_before_selection * events_to_process / total_events)], dtype=torch.float)
-                    elif self.input_format == "TreeMaker2":
-                        graph.w = torch.tensor(event["Weight"], dtype=torch.float)
-                        
-                # Add the number of constituents if requested
-                if self.save_n_constituents:
-                    graph.n_constituents = torch.tensor([n_constituents], dtype=torch.long)
+                    if not self.max_events_to_process:
+                        weight = xsec / gen_events_before_selection
+                    else:
+                        weight = xsec / (
+                            gen_events_before_selection
+                            * events_to_process
+                            / total_events
+                        )
+                    graph.w = torch.tensor([weight], dtype=torch.float)
 
-                # Add the event number if requested
+                if self.save_n_constituents:
+                    graph.n_constituents = torch.tensor(
+                        [n_constituents], dtype=torch.long
+                    )
                 if self.save_event_number:
                     graph.event_number = torch.tensor([i_ev], dtype=torch.long)
-
-                # Add jet index if requested
                 if self.save_jet_idx:
-                    graph["jet_idx"] = torch.tensor([jet_idx], dtype=torch.int)
+                    graph.jet_idx = torch.tensor([jet_index], dtype=torch.int)
 
-                # Add any extra jet-level observables if requested
-                for obs in self.extra_obs_to_save_per_jet:
-                    graph[obs] = torch.tensor([event[obs][nj]], dtype=torch.float)
-                for obs in self.extra_obs_to_save_per_event:
-                    graph[obs] = torch.tensor([event[obs]], dtype=torch.float)
-                for obs in self.extra_obs_to_compute_per_event:
-                    graph[obs.__name__] = torch.tensor([obs(event)], dtype=torch.float)
-                        
+                for observable in self.extra_obs_to_save_per_jet:
+                    graph[observable] = torch.tensor(
+                        [event[observable][jet_index]], dtype=torch.float
+                    )
+                for observable in self.extra_obs_to_save_per_event:
+                    graph[observable] = torch.tensor(
+                        [event[observable]], dtype=torch.float
+                    )
+                for observable in self.extra_obs_to_compute_per_event:
+                    graph[observable.__name__] = torch.tensor(
+                        [observable(event)], dtype=torch.float
+                    )
                 graphs.append(graph)
 
         return graphs
-
     def get_graphs(self, file_name):
+        xsec = 1.0
+        gen_events_before_selection = None
+        if self.weights == "xsec":
+            with uproot.open(file_name) as input_file:
+                if "Metadata" not in input_file:
+                    raise ValueError("No Metadata tree found in file")
+                if "GenCrossSection" not in input_file["Metadata"].keys():
+                    raise ValueError("No GenCrossSection found in Metadata")
+                xsec = input_file["Metadata"]["GenCrossSection"].array(
+                    entry_stop=1
+                )[0]
+                gen_events_before_selection = self.get_total_initial_events()
 
-        # Check if xsec weights are requested
-        if self.weights is None:
-            xsec = 1.
-            gen_events_before_selection = None
+        extra_branches = (
+            self.extra_obs_to_load
+            + self.extra_obs_to_save_per_event
+            + self.extra_obs_to_save_per_jet
+        )
+        branches = pfnano_branches(
+            self._graph_build_config(), extra_branches
+        )
+        with uproot.open(f"{file_name}:Events") as tree:
+            total_events = tree.num_entries
+            events_to_process = (
+                min(self.max_events_to_process, total_events)
+                if self.max_events_to_process
+                else total_events
+            )
+            events = tree.arrays(
+                branches, entry_stop=events_to_process, library="ak"
+            )
 
-        if self.input_format == "PFNanoAOD":
-            if self.weights == "xsec":
-                with uproot.open(file_name) as in_file:
-                    if "Metadata" in in_file:
-                        if "GenCrossSection" in in_file["Metadata"].keys():
-                            xsec = in_file["Metadata"]["GenCrossSection"].array()[0]
-                            gen_events_before_selection = self.get_total_initial_events()
-                        else:
-                            raise ValueError("No GenCrossSection found in Metadata")
-                    else:
-                        raise ValueError("No Metadata tree found in file")
-
-            branches_to_load = [
-                "PFCands_pt",
-                "PFCands_eta",
-                "PFCands_phi",
-                "PFCands_pdgId",
-                "PFCands_mass",  
-                "FatJetPFCands_jetIdx",
-                "FatJetPFCands_pFCandsIdx",
-                "nFatJet",
-                "FatJet_eta",
-                "FatJet_phi",
-                "FatJet_pt",
-            ] + self.extra_obs_to_load
-
-            if self.use_displacement:
-                branches_to_load += ["PFCands_d0", "PFCands_dz"]
-            
-            for obs in self.extra_obs_to_save_per_event:
-                if obs not in branches_to_load: branches_to_load.append(obs)
-            for obs in self.extra_obs_to_save_per_jet:
-                if obs not in branches_to_load: branches_to_load.append(obs)
-
-            with uproot.open(f"{file_name}:Events") as in_file:
-                events = in_file.arrays(branches_to_load, library="ak")
-
-        elif self.input_format == "TreeMaker2":
-            branches_to_load = [
-                "JetsConstituents/JetsConstituents.fCoordinates.fPt",
-                "JetsConstituents/JetsConstituents.fCoordinates.fEta",
-                "JetsConstituents/JetsConstituents.fCoordinates.fPhi",
-                "JetsConstituents/JetsConstituents.fCoordinates.fE",
-                "JetsConstituents_PdgId",
-                f"{self.jet_collection}_constituentsIndex",
-                f"{self.jet_collection}_constituentsIndexCounts",
-                f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPt",
-                f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fEta",
-                f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPhi",
-                f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fE",
-                "Weight",
-            ] + self.extra_obs_to_load
-
-            xsec = None
-            gen_events_before_selection = None
-       
-            for obs in self.extra_obs_to_save_per_event:
-                if obs not in branches_to_load: branches_to_load.append(obs)
-            for obs in self.extra_obs_to_save_per_jet:
-                if obs not in branches_to_load: branches_to_load.append(obs)
-
-            with uproot.open(f"{file_name}:TreeMaker2/PreSelection") as in_file:
-                events = in_file.arrays(branches_to_load, library="ak")
-
-            if self.mask:
-                events = ak.mask(events, ak.num(events[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPt"], axis = 1) > 1)
-
-        total_events = len(events)
-        if self.input_format == "PFNanoAOD":
-            if gen_events_before_selection is None:
-                gen_events_before_selection = total_events
-        
-        events_to_process = min(self.max_events_to_process, total_events) if self.max_events_to_process else total_events
-
-        graphDataset = self.process_event(
+        if gen_events_before_selection is None:
+            gen_events_before_selection = total_events
+        graphs = self.process_event(
             0,
             events_to_process,
             events,
@@ -566,160 +531,160 @@ class JetGraphProducer(Dataset):
             total_events,
             events_to_process,
         )
-
         if self.pre_transform is not None:
-            graphDataset = [self.pre_transform(d) for d in graphDataset]
-
-        return graphDataset
-
-    def _iter_graphs_from_file(self, file_name):
-        """Generator that yields processed :obj:`Data` objects from a single
-        ROOT file, streaming events in batches of ``chunk_size`` to keep
-        memory usage bounded during dataset creation.
-
-        Unlike :meth:`get_graphs`, this method never loads the full event
-        array into RAM.  ``pre_filter`` and ``pre_transform`` are applied
-        to each graph before it is yielded.
-        """
-        if self.input_format == "PFNanoAOD":
-            xsec = 1.
-            gen_events_before_selection = None
-
-            if self.weights == "xsec":
-                with uproot.open(file_name) as meta_file:
-                    if "Metadata" not in meta_file:
-                        raise ValueError("No Metadata tree found in file")
-                    if "GenCrossSection" not in meta_file["Metadata"].keys():
-                        raise ValueError("No GenCrossSection found in Metadata")
-                    xsec = meta_file["Metadata"]["GenCrossSection"].array()[0]
-                    gen_events_before_selection = self.get_total_initial_events()
-
-            branches_to_load = [
-                "PFCands_pt",
-                "PFCands_eta",
-                "PFCands_phi",
-                "PFCands_pdgId",
-                "PFCands_mass",
-                "FatJetPFCands_jetIdx",
-                "FatJetPFCands_pFCandsIdx",
-                "nFatJet",
-                "FatJet_eta",
-                "FatJet_phi",
-                "FatJet_pt",
-            ] + self.extra_obs_to_load
-
-            if self.use_displacement:
-                branches_to_load += ["PFCands_d0", "PFCands_dz"]
-
-            for obs in self.extra_obs_to_save_per_event:
-                if obs not in branches_to_load:
-                    branches_to_load.append(obs)
-            for obs in self.extra_obs_to_save_per_jet:
-                if obs not in branches_to_load:
-                    branches_to_load.append(obs)
-
-            # Get the total number of entries without loading any event data
-            with uproot.open(f"{file_name}:Events") as tree:
-                total_events = tree.num_entries
-
-            if gen_events_before_selection is None:
-                gen_events_before_selection = total_events
-
-            events_to_process = (
-                min(self.max_events_to_process, total_events)
-                if self.max_events_to_process else total_events
+            graphs = [self.pre_transform(graph) for graph in graphs]
+        return graphs
+    def _process_entry_range(
+        self,
+        file_name,
+        tree_path,
+        branches_to_load,
+        entry_start,
+        entry_stop,
+        xsec,
+        gen_events_before_selection,
+        total_events,
+        events_to_process,
+    ):
+        """Read and process one independent range of ROOT entries."""
+        with uproot.open(f"{file_name}:{tree_path}") as tree:
+            events_batch = tree.arrays(
+                branches_to_load,
+                entry_start=entry_start,
+                entry_stop=entry_stop,
+                library="ak",
             )
 
-            cumulative_offset = 0
-            for events_batch in uproot.iterate(
-                f"{file_name}:Events",
+        graphs = self.process_event(
+            0,
+            len(events_batch),
+            events_batch,
+            xsec,
+            gen_events_before_selection,
+            total_events,
+            events_to_process,
+            show_progress=False,
+        )
+        if self.save_event_number:
+            for graph in graphs:
+                graph.event_number = graph.event_number + entry_start
+        if self.pre_transform is not None:
+            graphs = [self.pre_transform(graph) for graph in graphs]
+        if self.pre_filter is not None:
+            graphs = [graph for graph in graphs if self.pre_filter(graph)]
+        return graphs
+
+    def _iter_entry_ranges(
+        self,
+        executor,
+        file_name,
+        tree_path,
+        branches_to_load,
+        total_events,
+        events_to_process,
+        xsec,
+        gen_events_before_selection,
+    ):
+        tasks = (
+            (
+                file_name,
+                tree_path,
                 branches_to_load,
-                step_size=self.chunk_size,
-                entry_stop=events_to_process,
-                library="ak",
-            ):
-                graphs = self.process_event(
-                    0,
-                    len(events_batch),
-                    events_batch,
-                    xsec,
-                    gen_events_before_selection,
-                    total_events,
-                    events_to_process,
-                )
-                if self.save_event_number:
-                    for g in graphs:
-                        g.event_number = g.event_number + cumulative_offset
-                cumulative_offset += len(events_batch)
-                if self.pre_transform is not None:
-                    graphs = [self.pre_transform(g) for g in graphs]
-                for g in graphs:
-                    if self.pre_filter is None or self.pre_filter(g):
-                        yield g
-
-        elif self.input_format == "TreeMaker2":
-            branches_to_load = [
-                "JetsConstituents/JetsConstituents.fCoordinates.fPt",
-                "JetsConstituents/JetsConstituents.fCoordinates.fEta",
-                "JetsConstituents/JetsConstituents.fCoordinates.fPhi",
-                "JetsConstituents/JetsConstituents.fCoordinates.fE",
-                "JetsConstituents_PdgId",
-                f"{self.jet_collection}_constituentsIndex",
-                f"{self.jet_collection}_constituentsIndexCounts",
-                f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPt",
-                f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fEta",
-                f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPhi",
-                f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fE",
-                "Weight",
-            ] + self.extra_obs_to_load
-
-            for obs in self.extra_obs_to_save_per_event:
-                if obs not in branches_to_load:
-                    branches_to_load.append(obs)
-            for obs in self.extra_obs_to_save_per_jet:
-                if obs not in branches_to_load:
-                    branches_to_load.append(obs)
-
-            with uproot.open(f"{file_name}:TreeMaker2/PreSelection") as tree:
-                total_events = tree.num_entries
-
-            events_to_process = (
-                min(self.max_events_to_process, total_events)
-                if self.max_events_to_process else total_events
+                entry_start,
+                min(entry_start + self.event_batch_size, events_to_process),
+                xsec,
+                gen_events_before_selection,
+                total_events,
+                events_to_process,
             )
+            for entry_start in range(
+                0, events_to_process, self.event_batch_size
+            )
+        )
 
-            cumulative_offset = 0
-            for events_batch in uproot.iterate(
-                f"{file_name}:TreeMaker2/PreSelection",
-                branches_to_load,
-                step_size=self.chunk_size,
-                entry_stop=events_to_process,
-                library="ak",
-            ):
-                if self.mask:
-                    events_batch = ak.mask(
-                        events_batch,
-                        ak.num(events_batch[f"{self.jet_collection}/{self.jet_collection}.fCoordinates.fPt"], axis=1) > 1,
-                    )
-                graphs = self.process_event(
-                    0,
-                    len(events_batch),
-                    events_batch,
-                    None,
-                    None,
-                    total_events,
-                    events_to_process,
-                )
-                if self.save_event_number:
-                    for g in graphs:
-                        g.event_number = g.event_number + cumulative_offset
-                cumulative_offset += len(events_batch)
-                if self.pre_transform is not None:
-                    graphs = [self.pre_transform(g) for g in graphs]
-                for g in graphs:
-                    if self.pre_filter is None or self.pre_filter(g):
-                        yield g
+        with tqdm(
+            total=events_to_process,
+            desc=f"Processing {os.path.basename(file_name)}",
+            disable=not self.verbose,
+        ) as progress:
+            if executor is None:
+                for task in tasks:
+                    graphs = self._process_entry_range(*task)
+                    progress.update(task[4] - task[3])
+                    yield from graphs
+                return
 
+            # Keep only a bounded number of ranges in flight. Futures are
+            # consumed in submission order, preserving graph ordering.
+            pending = collections.deque()
+            max_pending = self.num_workers * self.worker_prefetch
+            for _ in range(max_pending):
+                try:
+                    task = next(tasks)
+                    pending.append((
+                        executor.submit(_process_graph_entry_range, task),
+                        task[4] - task[3],
+                    ))
+                except StopIteration:
+                    break
+
+            while pending:
+                future, n_entries = pending.popleft()
+                graphs = pickle.loads(future.result())
+                progress.update(n_entries)
+                yield from graphs
+                try:
+                    task = next(tasks)
+                    pending.append((
+                        executor.submit(_process_graph_entry_range, task),
+                        task[4] - task[3],
+                    ))
+                except StopIteration:
+                    pass
+
+    def _iter_graphs_from_file(self, file_name, executor=None):
+        """Yield PFNanoAOD graphs from deterministic event ranges."""
+        xsec = 1.0
+        gen_events_before_selection = None
+        if self.weights == "xsec":
+            with uproot.open(file_name) as metadata_file:
+                if "Metadata" not in metadata_file:
+                    raise ValueError("No Metadata tree found in file")
+                if "GenCrossSection" not in metadata_file["Metadata"].keys():
+                    raise ValueError("No GenCrossSection found in Metadata")
+                xsec = metadata_file["Metadata"]["GenCrossSection"].array(
+                    entry_stop=1
+                )[0]
+                gen_events_before_selection = self.get_total_initial_events()
+
+        extra_branches = (
+            self.extra_obs_to_load
+            + self.extra_obs_to_save_per_event
+            + self.extra_obs_to_save_per_jet
+        )
+        branches = pfnano_branches(
+            self._graph_build_config(), extra_branches
+        )
+        with uproot.open(f"{file_name}:Events") as tree:
+            total_events = tree.num_entries
+
+        if gen_events_before_selection is None:
+            gen_events_before_selection = total_events
+        events_to_process = (
+            min(self.max_events_to_process, total_events)
+            if self.max_events_to_process
+            else total_events
+        )
+        yield from self._iter_entry_ranges(
+            executor,
+            file_name,
+            "Events",
+            branches,
+            total_events,
+            events_to_process,
+            xsec,
+            gen_events_before_selection,
+        )
     def get(self, idx: int) -> Data:
         """Load and return the graph at global position *idx*.
 
@@ -728,15 +693,15 @@ class JetGraphProducer(Dataset):
         and batch-level access patterns reuse already-loaded chunks without
         keeping the entire dataset in RAM.
         """
-        chunk_idx = idx // self.chunk_size
-        pos = idx % self.chunk_size
+        chunk_idx = idx // self.graphs_per_chunk
+        pos = idx % self.graphs_per_chunk
 
         if chunk_idx not in self._chunk_cache:
             chunk_path = os.path.join(
                 self.processed_dir,
                 f"{self.output_dataset_name}_chunk_{chunk_idx}.pt",
             )
-            chunk = torch.load(chunk_path)
+            chunk = torch.load(chunk_path, weights_only=False)
             # Evict the oldest entry when the cache is full
             if len(self._chunk_cache) >= self._n_cached_chunks:
                 self._chunk_cache.popitem(last=False)
@@ -754,7 +719,7 @@ class JetGraphProducer(Dataset):
     def process(self):
         # Stream graphs from every input file and write them to disk in
         # chunk files as they are produced, so that the peak RAM usage
-        # during processing is proportional to chunk_size, not to the
+        # during processing is proportional to graphs_per_chunk, not to the
         # total dataset size.
         buffer = []
         chunk_idx = 0
@@ -770,19 +735,41 @@ class JetGraphProducer(Dataset):
             )
             torch.save(data, chunk_path)
 
-        for file in self.raw_file_names:
-            print(f"Processing {file}")
-            for g in self._iter_graphs_from_file(file):
-                buffer.append(g)
-                w_list.append(g.w if hasattr(g, "w") else default_weight)
-                if jet_idx_list is not None:
-                    jet_idx_list.append(g.jet_idx)
-                n_graphs += 1
+        def _consume_files(executor=None):
+            nonlocal buffer, chunk_idx, n_graphs
+            for file in self.raw_file_names:
+                print(f"Processing {file}")
+                for graph in self._iter_graphs_from_file(file, executor):
+                    buffer.append(graph)
+                    w_list.append(
+                        graph.w if hasattr(graph, "w") else default_weight
+                    )
+                    if jet_idx_list is not None:
+                        jet_idx_list.append(graph.jet_idx)
+                    n_graphs += 1
 
-                if len(buffer) == self.chunk_size:
-                    _flush_chunk(buffer, chunk_idx)
-                    buffer = []
-                    chunk_idx += 1
+                    if len(buffer) == self.graphs_per_chunk:
+                        _flush_chunk(buffer, chunk_idx)
+                        buffer = []
+                        chunk_idx += 1
+
+        if self.num_workers == 1:
+            _consume_files()
+        else:
+            # ``fork`` avoids requiring user scripts to be guarded by
+            # ``if __name__ == "__main__"`` and shares imported/JIT state
+            # copy-on-write. Fall back to the platform default where absent.
+            start_methods = multiprocessing.get_all_start_methods()
+            context = multiprocessing.get_context(
+                "fork" if "fork" in start_methods else None
+            )
+            with concurrent.futures.ProcessPoolExecutor(
+                max_workers=self.num_workers,
+                mp_context=context,
+                initializer=_initialize_graph_worker,
+                initargs=(self,),
+            ) as executor:
+                _consume_files(executor)
 
         # Flush any graphs that didn't fill a complete chunk
         if buffer:
@@ -792,12 +779,17 @@ class JetGraphProducer(Dataset):
         meta = {
             "n_graphs": n_graphs,
             "n_chunks": chunk_idx,
-            "chunk_size": self.chunk_size,
-            "w": torch.cat(w_list),
-            "jet_idx": torch.cat(jet_idx_list) if jet_idx_list is not None else None,
+            "chunk_size": self.graphs_per_chunk,
+            "graphs_per_chunk": self.graphs_per_chunk,
+            "w": torch.cat(w_list) if w_list else torch.empty(0),
+            "jet_idx": (
+                torch.cat(jet_idx_list)
+                if jet_idx_list
+                else None
+            ),
+            "processing_config": self._processing_config(),
         }
         torch.save(
             meta,
             os.path.join(self.processed_dir, f"{self.output_dataset_name}_meta.pt"),
         )
-

@@ -42,6 +42,29 @@ git clone git@github.com:rseidita/SVJ_GNN.git
 
 A complete example is given in the aptly named "example" notebook. Data loading and processing, model definition and training are covered.
 
+Graph production supports independent I/O and storage sizing:
+
+```python
+dataset = JetGraphProducer(
+    "data/",
+    "qcd_lund",
+    use_lund_decomp=True,
+    graphs_per_chunk=1000,
+    event_batch_size=100,
+    num_workers=4,
+)
+```
+
+`graphs_per_chunk` controls the processed dataset files, while
+`event_batch_size` controls how many ROOT entries are assigned to each worker.
+Only PFNanoAOD input is currently supported.
+
+Run the regression suite with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
 ## Contact
 
 roberto.seidita@cern.ch
