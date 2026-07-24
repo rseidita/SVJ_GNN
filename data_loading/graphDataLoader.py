@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import List, Optional
 
 import torch
-from torch.utils.data import ConcatDataset, WeightedRandomSampler
+from torch.utils.data import ConcatDataset, Sampler
 from torch_geometric.loader import DataLoader
 
 from utils.JetGraphProducer import JetGraphProducer
@@ -13,6 +13,58 @@ from utils.LundTreeUtilities import OnTheFlyNormalizer
 
 _SPLIT_STATE_VERSION = 1
 _SAMPLING_MODES = {"sequential", "shuffle", "weighted"}
+
+
+class ChunkAwareWeightedSampler(Sampler):
+    """Draw weighted samples, then order the draw by randomized chunk.
+
+    Grouping happens after ``torch.multinomial``. The sampled multiset,
+    including repetitions, is therefore identical to ordinary weighted
+    sampling; only its traversal order changes.
+    """
+
+    def __init__(self, weights, chunk_ids, num_samples, generator=None):
+        self.weights = torch.as_tensor(
+            weights, dtype=torch.double
+        ).detach().cpu()
+        self.chunk_ids = torch.as_tensor(
+            chunk_ids, dtype=torch.long
+        ).detach().cpu()
+        self.num_samples = int(num_samples)
+        self.generator = generator
+
+        if self.weights.ndim != 1:
+            raise ValueError("weights must be one-dimensional")
+        if self.chunk_ids.shape != self.weights.shape:
+            raise ValueError("chunk_ids and weights must have the same shape")
+        if self.num_samples <= 0:
+            raise ValueError("num_samples must be positive")
+
+    def __iter__(self):
+        sampled = torch.multinomial(
+            self.weights,
+            self.num_samples,
+            replacement=True,
+            generator=self.generator,
+        )
+        sampled_chunks = self.chunk_ids[sampled]
+        _, inverse_chunks = torch.unique(
+            sampled_chunks, return_inverse=True
+        )
+        n_chunks = int(inverse_chunks.max()) + 1
+        chunk_order = torch.randperm(n_chunks, generator=self.generator)
+        chunk_rank = torch.empty(n_chunks, dtype=torch.long)
+        chunk_rank[chunk_order] = torch.arange(n_chunks)
+
+        # A stable sort preserves the multinomial ordering within each chunk.
+        # Assigning randomized ranks first randomizes the order of chunks.
+        traversal_order = torch.argsort(
+            chunk_rank[inverse_chunks], stable=True
+        )
+        yield from sampled[traversal_order].tolist()
+
+    def __len__(self):
+        return self.num_samples
 
 
 def _dataset_key(path, name):
@@ -227,6 +279,8 @@ class GraphDataLoader(DataLoader):
 
         datasets = []
         weights = []
+        chunk_ids = []
+        chunk_offset = 0
         generated_state = {
             "version": _SPLIT_STATE_VERSION,
             "seed": (
@@ -310,6 +364,11 @@ class GraphDataLoader(DataLoader):
             start = int(start_fraction * length)
             stop = int(stop_fraction * length)
             selected_indices = dataset_permutation[start:stop]
+            # The permutation determines partition membership, not physical
+            # traversal order. Sorting the selected global indices lets
+            # sequential loaders stream each graph chunk once instead of
+            # repeatedly evicting and reloading chunks in permutation order.
+            selected_indices = selected_indices.sort().values
             data = data[selected_indices]
 
             if jet_idx is not None:
@@ -321,6 +380,16 @@ class GraphDataLoader(DataLoader):
                 )
 
             if sampling == "weighted":
+                original_indices = torch.as_tensor(
+                    data.indices(), dtype=torch.long
+                )
+                chunk_ids.append(
+                    original_indices // data.graphs_per_chunk + chunk_offset
+                )
+                chunk_offset += (
+                    length + data.graphs_per_chunk - 1
+                ) // data.graphs_per_chunk
+
                 if sampling_weights == "event":
                     data_weights = data.w.detach().cpu().to(torch.double)
                 else:
@@ -359,10 +428,10 @@ class GraphDataLoader(DataLoader):
         sampler = None
         epoch_shuffle = sampling == "shuffle"
         if sampling == "weighted":
-            sampler = WeightedRandomSampler(
+            sampler = ChunkAwareWeightedSampler(
                 combined_weights,
+                torch.cat(chunk_ids),
                 num_samples=len(combined_dataset),
-                replacement=True,
                 generator=generator,
             )
 

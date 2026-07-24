@@ -241,6 +241,15 @@ Split states contain path-qualified dataset keys, lengths, complete
 permutations, and metadata fingerprints. A split is rejected if the processed
 dataset has been regenerated or otherwise changed.
 
+The fixed permutation determines which graphs belong to each partition.
+Within a partition, the selected indices are traversed in storage order so
+sequential statistics and evaluation passes retain chunk locality. This does
+not change partition membership. `sampling="shuffle"` randomizes access within
+the selected partition. Weighted sampling first makes the exact weighted draw
+with replacement, then randomizes and groups that draw by storage chunk. This
+preserves all sampled graphs and multiplicities while avoiding repeated chunk
+deserialization.
+
 Available sampling modes are:
 
 - `sampling="sequential"`: stable partition order.

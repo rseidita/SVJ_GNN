@@ -6,7 +6,10 @@ import awkward as ak
 import torch
 import uproot
 
-from data_loading.graphDataLoader import GraphDataLoader
+from data_loading.graphDataLoader import (
+    ChunkAwareWeightedSampler,
+    GraphDataLoader,
+)
 from utils.JetGraphProducer import JetGraphProducer
 from utils.ScoreProducer import ScoreProducer
 
@@ -177,6 +180,27 @@ class ProductionTests(unittest.TestCase):
         self.assertTrue(set(train_ids).isdisjoint(validation_ids))
         self.assertEqual(len(set(train_ids) | set(validation_ids)), 8)
 
+    def test_split_membership_is_traversed_in_storage_order(self):
+        self.producer("storage_order")
+        loader = GraphDataLoader(
+            [[str(self.root), "storage_order"]],
+            split_windows=[[0.0, 0.5]],
+            split_seed=9876,
+            sampling="sequential",
+            batch_size=2,
+        )
+        record = next(iter(loader.get_split_state()["datasets"].values()))
+        expected_membership = set(record["permutation"][:4].tolist())
+
+        dataset_view = loader.dataset.datasets[0]
+        selected_indices = torch.as_tensor(
+            dataset_view.indices(), dtype=torch.long
+        )
+        self.assertEqual(set(selected_indices.tolist()), expected_membership)
+        self.assertTrue(
+            torch.equal(selected_indices, selected_indices.sort().values)
+        )
+
     def test_epoch_shuffle_is_independent_of_fixed_split(self):
         self.producer("epoch_shuffle")
         loader = GraphDataLoader(
@@ -239,6 +263,45 @@ class ProductionTests(unittest.TestCase):
         weights = loader.sampler.weights
         self.assertAlmostEqual(weights[:8].sum().item(), 0.25)
         self.assertAlmostEqual(weights[8:].sum().item(), 0.75)
+
+    def test_chunk_aware_sampler_preserves_weighted_draw(self):
+        weights = torch.arange(1, 13, dtype=torch.double)
+        chunk_ids = torch.arange(12) // 3
+        seed = 2468
+        expected = torch.multinomial(
+            weights,
+            200,
+            replacement=True,
+            generator=torch.Generator().manual_seed(seed),
+        )
+        sampler = ChunkAwareWeightedSampler(
+            weights,
+            chunk_ids,
+            num_samples=200,
+            generator=torch.Generator().manual_seed(seed),
+        )
+        actual = torch.tensor(list(sampler))
+
+        self.assertTrue(
+            torch.equal(actual.sort().values, expected.sort().values)
+        )
+        traversed_chunks = chunk_ids[actual]
+        transitions = (traversed_chunks[1:] != traversed_chunks[:-1]).sum()
+        self.assertLessEqual(transitions.item(), 3)
+
+    def test_chunk_aware_weighted_loader_changes_epoch_draw(self):
+        self.producer("chunk_weighted")
+        loader = GraphDataLoader(
+            [[str(self.root), "chunk_weighted"]],
+            sampling="weighted",
+            generator=torch.Generator().manual_seed(1357),
+            batch_size=2,
+        )
+        first_epoch = self.loader_identities(loader)
+        second_epoch = self.loader_identities(loader)
+        self.assertEqual(len(first_epoch), len(loader.dataset))
+        self.assertEqual(len(second_epoch), len(loader.dataset))
+        self.assertNotEqual(first_epoch, second_epoch)
 
     def test_treemaker_is_explicitly_unsupported(self):
         with self.assertRaisesRegex(
