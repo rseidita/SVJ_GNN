@@ -289,13 +289,71 @@ only.
 
 ## Scoring ROOT files
 
-`ScoreProducer` builds the same Lund representation through the shared graph
-builder, evaluates a compatible graph-autoencoder model, and writes a
-`FatJet_GNNScore` branch to a new PFNanoAOD ROOT file.
+`RootGraphScorer` streams bounded entry ranges directly from ROOT through graph
+construction and batched inference. It creates no intermediate `.pt` files and
+returns one ordered, jagged score array per input file:
 
-See `score_per_file_example.py` for the current command-line workflow. Model
-feature dimensions and normalization statistics must match the graph
-configuration used during training.
+```python
+from utils.GraphBuilder import GraphBuildConfig
+from utils.RootGraphScorer import RootGraphScorer
+
+graph_config = GraphBuildConfig(
+    use_lund_decomp=True,
+    n_lund_vars=5,
+    save_4vectors_in_lund_tree=True,
+    save_energy_fractions=True,
+)
+
+scorer = RootGraphScorer(
+    model,
+    graph_config,
+    normalizer={"means": means, "stds": stds},
+    alpha=1.0,
+    device="cuda",
+    root_entry_batch_size=1000,
+    graph_batch_size=256,
+    num_workers=4,
+    worker_prefetch=2,
+    verbose=True,
+)
+
+scores = scorer.score_files(["input_a.root", "input_b.root"])
+first_event_scores = scores["input_a.root"][0]
+```
+
+Each result has shape `events × jets`, matching the original entry and jet
+order. A jet for which no graph can be constructed receives `NaN`, preserving
+alignment. For pipelines that should not retain all scores in memory, use
+`scorer.iter_file(...)` to consume contiguous `ScoreChunk` objects.
+
+`num_workers` parallelizes ROOT reading and graph construction over contiguous
+entry ranges. Worker results are consumed in submission order, while model
+inference remains in the parent process, so event and jet ordering is
+unchanged. `worker_prefetch` bounds the number of queued ranges per worker.
+Use `num_workers=1` for the sequential path. Multiprocessing uses `spawn` by
+default so workers do not inherit initialized PyTorch or CUDA thread state.
+The start method can be overridden with `multiprocessing_start_method`.
+When using multiple workers from a standalone Python script, create and run
+the scorer inside the usual `if __name__ == "__main__":` guard required by
+the `spawn` start method. This guard is not needed in a notebook.
+
+The inference score is the positive-edge reconstruction loss plus `alpha`
+times the feature reconstruction loss. Negative edges remain part of training
+but are deliberately excluded from inference for now; this choice can be
+revisited if false-positive edge predictions become useful.
+
+For debugging one already-built graph without creating a PyG batch:
+
+```python
+model.eval()
+with torch.inference_mode():
+    total, edge, features = model.score_event(qcd[0], alpha=1.0)
+```
+
+`score_event` also accepts `model.score_event(graph.x, graph.edge_index)`.
+
+The older `ScoreProducer` workflow remains available for writing a complete
+copy of the ROOT file with an added score branch.
 
 ## Tests
 
@@ -325,6 +383,7 @@ tests/                      Regression suite
 utils/GraphBuilder.py       Shared PFNanoAOD graph construction
 utils/JetGraphProducer.py   Dataset production, caching, multiprocessing
 utils/LundTreeUtilities.py  Cambridge–Aachen clustering and tree utilities
+utils/RootGraphScorer.py    Streaming, ordered ROOT inference
 utils/ScoreProducer.py      ROOT scoring workflow
 ```
 

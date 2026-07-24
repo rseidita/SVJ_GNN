@@ -6,11 +6,14 @@ import awkward as ak
 import torch
 import uproot
 
+from architectures.GraphAE import graphAE
 from data_loading.graphDataLoader import (
     ChunkAwareWeightedSampler,
     GraphDataLoader,
 )
+from utils.GraphBuilder import GraphBuildConfig, build_pfnano_jet_graph
 from utils.JetGraphProducer import JetGraphProducer
+from utils.RootGraphScorer import RootGraphScorer
 from utils.ScoreProducer import ScoreProducer
 
 
@@ -316,6 +319,97 @@ class ProductionTests(unittest.TestCase):
                 input_format="TreeMaker2",
                 model=None,
             )
+
+    def test_streaming_scorer_preserves_order_without_pt_files(self):
+        config = GraphBuildConfig(
+            use_lund_decomp=True,
+            n_lund_vars=5,
+            save_energy_fractions=True,
+            save_4vectors_in_lund_tree=True,
+        )
+        model = graphAE(num_features=12, architecture=(8, 4))
+        file_name = self.root / "fixture.root"
+
+        single_graph = RootGraphScorer(
+            model,
+            config,
+            device="cpu",
+            root_entry_batch_size=1,
+            graph_batch_size=1,
+        )
+        batched = RootGraphScorer(
+            model,
+            config,
+            device="cpu",
+            root_entry_batch_size=3,
+            graph_batch_size=5,
+            num_workers=2,
+            worker_prefetch=1,
+        )
+        reference = single_graph.score_file(file_name)
+        result = batched.score_file(file_name)
+
+        self.assertEqual(ak.num(result, axis=0), 4)
+        self.assertEqual(ak.to_list(ak.num(result, axis=1)), [2, 2, 2, 2])
+        self.assertTrue(
+            torch.allclose(
+                torch.tensor(ak.flatten(reference).to_list()),
+                torch.tensor(ak.flatten(result).to_list()),
+                rtol=1e-5,
+                atol=1e-6,
+            )
+        )
+
+        with uproot.open(f"{file_name}:Events") as tree:
+            event = tree.arrays(library="ak", entry_stop=1)[0]
+        graph, _ = build_pfnano_jet_graph(event, 0, config)
+        model.eval()
+        with torch.inference_mode():
+            legacy_score = (
+                model.edges_loss(
+                    graph.x,
+                    graph.edge_index,
+                    torch.empty((2, 0), dtype=torch.long),
+                )
+                + model.features_loss(graph.x, graph.edge_index)
+            )
+            event_scores = model.score_event(graph)
+            tensor_scores = model.score_event(
+                graph.x, graph.edge_index
+            )
+        self.assertTrue(
+            torch.isclose(
+                torch.tensor(result[0, 0], dtype=legacy_score.dtype),
+                legacy_score,
+                rtol=1e-5,
+                atol=1e-6,
+            )
+        )
+        self.assertTrue(torch.isclose(event_scores[0], legacy_score))
+        for graph_score, tensor_score in zip(
+            event_scores, tensor_scores
+        ):
+            self.assertTrue(torch.equal(graph_score, tensor_score))
+        self.assertEqual(list(self.root.rglob("*.pt")), [])
+
+    def test_streaming_scorer_yields_contiguous_entry_chunks(self):
+        config = GraphBuildConfig(
+            use_lund_decomp=True,
+            n_lund_vars=3,
+            save_energy_fractions=False,
+        )
+        scorer = RootGraphScorer(
+            graphAE(num_features=3, architecture=(4, 2)),
+            config,
+            device="cpu",
+            root_entry_batch_size=3,
+            graph_batch_size=4,
+        )
+        chunks = list(scorer.iter_file(self.root / "fixture.root"))
+        self.assertEqual(
+            [(chunk.entry_start, chunk.entry_stop) for chunk in chunks],
+            [(0, 3), (3, 4)],
+        )
 
 
 if __name__ == "__main__":
