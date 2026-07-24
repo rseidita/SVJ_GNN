@@ -287,6 +287,37 @@ loader = GraphDataLoader(
 Means and standard deviations should be computed from the training partition
 only.
 
+## Autoencoder models
+
+The vanilla GCN autoencoder and the small graph-transformer alternative expose
+the same forward, loss, and per-graph scoring methods:
+
+```python
+from architectures.GraphAE import graphAE
+from architectures.GraphTransformerAE import GraphTransformerAE
+
+gcn_model = graphAE(
+    num_features=n_features,
+    architecture=(64, 32, 16),
+)
+
+transformer_model = GraphTransformerAE(
+    num_features=n_features,
+    architecture=(64, 32, 16),
+    heads=2,
+    dropout=0.1,
+)
+
+# Select either model without changing the existing training loop.
+model = transformer_model.to(device)
+```
+
+The transformer uses `TransformerConv` attention over the graph edges rather
+than dense all-pairs attention. Its feature decoder mirrors the encoder widths,
+while edge reconstruction uses the same inner-product decoder as `graphAE`.
+Because both models implement `edges_loss`, `features_loss`, `score_batch`, and
+`score_event`, they can also be passed directly to `RootGraphScorer`.
+
 ## Scoring ROOT files
 
 `RootGraphScorer` streams bounded entry ranges directly from ROOT through graph
