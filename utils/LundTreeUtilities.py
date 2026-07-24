@@ -1,8 +1,9 @@
+from collections import deque
+
 import numpy as np
 import torch
 from torch_geometric.transforms import BaseTransform
 import numba as nb
-import vector
 
 # Avoid nasty interplays of torch and numba
 torch.multiprocessing.set_sharing_strategy('file_system')
@@ -54,88 +55,91 @@ def tensor_to_tree(nodes, edges):
     edges = np.array(edges)
 
     n_nodes = len(nodes)
+    if n_nodes == 0:
+        raise ValueError("Cannot convert an empty Lund tree")
 
-    # Convert arrays into a binary tree representation for easier pruning
-    # Find the top node of the tree
-    top_node_index = np.max(edges[0])
+    # Clustering appends each parent after its children, so the root has the
+    # largest node index. A one-node tree has no edges.
+    top_node_index = n_nodes - 1
     top_node = Node(nodes[top_node_index], top_node_index)
 
-    # Start walking down the tree
-    buffer = [top_node]
-    visited_nodes = [top_node_index]
-    while len(buffer) > 0:
-        # Get the next node
-        node = buffer.pop(0)
-        visited_nodes.append(node.idx)
+    neighbors = [[] for _ in range(n_nodes)]
+    for source, target in zip(edges[0], edges[1]):
+        source = int(source)
+        target = int(target)
+        if target not in neighbors[source]:
+            neighbors[source].append(target)
 
-        # Find the children of the node
-        node_children = [idx for idx in edges[1][np.where(edges[0] == node.idx)] if idx not in visited_nodes]
+    buffer = deque([(top_node, -1)])
+    visited_nodes = {top_node_index}
+    while buffer:
+        node, parent_index = buffer.popleft()
+        node_children = [
+            idx for idx in neighbors[node.idx]
+            if idx != parent_index and idx not in visited_nodes
+        ]
 
         # Check that the tree is binary as it should be
         if len(node_children) not in [0, 2]:
             raise ValueError("Lund Tree is not binary!")
-        # Add the children to the tree
         if len(node_children) == 2:
             node.left = Node(nodes[node_children[0]], node_children[0])
             node.right = Node(nodes[node_children[1]], node_children[1])
+            visited_nodes.update(node_children)
+            buffer.append((node.left, node.idx))
+            buffer.append((node.right, node.idx))
 
-            # Add the children to the buffer
-            buffer.append(node.left)
-            buffer.append(node.right)
+    if len(visited_nodes) != n_nodes:
+        raise ValueError("Lund Tree is disconnected!")
 
     return top_node
 
 def tree_to_tensor(top_node, shape):
-        # Walk along the tree and convert it back into arrays
-        nodes = np.zeros(shape)
-        edges = [[], []]
-        buffer = [top_node]
-        top_node.idx = 0
-        counter = 0
-        nodes[0] = top_node.value
+    # Walk along the tree and convert it back into arrays
+    nodes = np.zeros(shape)
+    edges = np.empty((2, 2 * max(shape[0] - 1, 0)), dtype=np.int64)
+    edge_offset = 0
+    buffer = [top_node]
+    top_node.idx = 0
+    counter = 0
+    nodes[0] = top_node.value
 
-        while len(buffer) > 0:
-            # Get the next node
-            node = buffer.pop()
-    
-            # Add the children to the buffer
-            if node.left is not None and node.right is not None:
-                # Keep track of the global node index
-                counter += 2
-                node.left.idx = counter - 1
-                node.right.idx = counter
-                
-                # Add the childrens features to the nodes array
-                nodes[node.left.idx] = node.left.value
-                nodes[node.right.idx] = node.right.value
+    while buffer:
+        node = buffer.pop()
 
-                # Add the children to the buffer
-                buffer.append(node.left)
-                buffer.append(node.right)
+        if node.left is not None and node.right is not None:
+            counter += 2
+            node.left.idx = counter - 1
+            node.right.idx = counter
 
-                # Add the edges to the edges array
-                edges[0].append(node.idx)
-                edges[1].append(node.left.idx)
-                edges[0].append(node.idx)
-                edges[1].append(node.right.idx)
-                edges[1].append(node.idx)
-                edges[0].append(node.left.idx)
-                edges[1].append(node.idx)
-                edges[0].append(node.right.idx)
-    
-        edges = np.array(edges)
-        nodes = np.array(nodes)
-    
-        return torch.tensor(nodes, dtype=torch.float), torch.tensor(edges, dtype=torch.long)
+            nodes[node.left.idx] = node.left.value
+            nodes[node.right.idx] = node.right.value
+
+            buffer.append(node.left)
+            buffer.append(node.right)
+
+            # Add both directions of each parent-child connection.
+            edges[0, edge_offset:edge_offset + 4] = (
+                node.idx, node.idx, node.left.idx, node.right.idx
+            )
+            edges[1, edge_offset:edge_offset + 4] = (
+                node.left.idx, node.right.idx, node.idx, node.idx
+            )
+            edge_offset += 4
+
+    return (
+        torch.as_tensor(nodes, dtype=torch.float),
+        torch.as_tensor(edges[:, :edge_offset], dtype=torch.long),
+    )
 
 def prune_tree(top_node, cut_variable_idx, cut_value):
 
     # Walk along the tree and prune nodes that do not pass the cut
-    buffer = [top_node]
+    buffer = deque([top_node])
     n_nodes = 0
-    while len(buffer) > 0:
+    while buffer:
         # Get the next node
-        node = buffer.pop(0)
+        node = buffer.popleft()
 
         # Count the number of nodes
         n_nodes += 1
@@ -155,31 +159,33 @@ def prune_tree(top_node, cut_variable_idx, cut_value):
     return top_node, n_nodes
 
 
-@nb.njit
+@nb.njit(cache=True)
 def get_rapidity(pt, eta, mass):
     return np.log((np.sqrt(mass**2 + (pt**2)*(np.cosh(eta)**2)) + pt*np.sinh(eta)) / np.sqrt(mass**2 + pt**2) + 1e-15)
 
-@nb.njit
+@nb.njit(cache=True)
 def get_delta(rapidity_a, rapidity_b, phi_a, phi_b):
-    return np.sqrt((phi_a - phi_b)**2 + (rapidity_a - rapidity_b)**2)
+    delta_phi = (phi_a - phi_b + np.pi) % (2 * np.pi) - np.pi
+    return np.hypot(delta_phi, rapidity_a - rapidity_b)
 
-@nb.njit
+@nb.njit(cache=True)
 def get_z(pt_a, pt_b):
     return min(pt_a, pt_b) / (pt_a + pt_b)
 
-@nb.njit
+@nb.njit(cache=True)
 def get_psi(rapidity_low, rapidity_high, phi_low, phi_high):
-    return np.arctan((rapidity_low - rapidity_high) / (phi_low - phi_high + 1e-15))
+    delta_phi = (phi_low - phi_high + np.pi) % (2 * np.pi) - np.pi
+    return np.arctan2(rapidity_low - rapidity_high, delta_phi)
 
-@nb.njit
+@nb.njit(cache=True)
 def get_kt(pt_low, pt_high, delta):
     return min(pt_low, pt_high) * delta
 
-@nb.njit
+@nb.njit(cache=True)
 def get_energy(pt, eta, mass):
-    return np.sqrt(mass**2 + pt**2)*np.cosh(eta)
+    return np.sqrt(mass**2 + (pt * np.cosh(eta))**2)
 
-@nb.njit
+@nb.njit(cache=True)
 def get_dij(constituents:np.ndarray)->np.ndarray:
     """
     Calculate the dij matrix for the Cambridge-Aachen clustering algorithm
@@ -192,21 +198,54 @@ def get_dij(constituents:np.ndarray)->np.ndarray:
     """
     y = get_rapidity(constituents[0], constituents[1], constituents[3])
     phi = constituents[2]
-    matrix_y = np.repeat(y, len(y)).reshape((len(y), -1))
-    matrix_phi = np.repeat(phi, len(phi)).reshape((len(phi), -1))
-    dij = ( (matrix_phi - matrix_phi.T)**2 + (matrix_y - matrix_y.T)**2 ) / 0.64
+    n_constituents = len(y)
+    dij = np.empty((n_constituents, n_constituents), dtype=np.float64)
+    for i in range(n_constituents):
+        dij[i, i] = np.inf
+        for j in range(i + 1, n_constituents):
+            delta_phi = (phi[i] - phi[j] + np.pi) % (2 * np.pi) - np.pi
+            distance = (delta_phi**2 + (y[i] - y[j])**2) / 0.64
+            dij[i, j] = distance
+            dij[j, i] = distance
 
     return dij
 
-@nb.njit
+@nb.njit(cache=True)
 def cluster_constituents(constituents:np.ndarray, index_a:int, index_b:int):
-    constituent_a = vector.obj(pt=constituents[0, index_a], eta=constituents[1, index_a], phi=constituents[2, index_a], mass=constituents[3, index_a])
-    constituent_b = vector.obj(pt=constituents[0, index_b], eta=constituents[1, index_b], phi=constituents[2, index_b], mass=constituents[3, index_b])
+    """Add two ``(pt, eta, phi, mass)`` four-vectors.
 
-    return constituent_a + constituent_b
+    This is implemented directly rather than through ``vector.obj`` because
+    vector's object backend is not reliably compatible with Numba's nopython
+    mode across vector/Numba version combinations.
+    """
+    pt_a = constituents[0, index_a]
+    eta_a = constituents[1, index_a]
+    phi_a = constituents[2, index_a]
+    mass_a = constituents[3, index_a]
+
+    pt_b = constituents[0, index_b]
+    eta_b = constituents[1, index_b]
+    phi_b = constituents[2, index_b]
+    mass_b = constituents[3, index_b]
+
+    px = pt_a * np.cos(phi_a) + pt_b * np.cos(phi_b)
+    py = pt_a * np.sin(phi_a) + pt_b * np.sin(phi_b)
+    pz = pt_a * np.sinh(eta_a) + pt_b * np.sinh(eta_b)
+
+    energy_a = np.sqrt(mass_a**2 + (pt_a * np.cosh(eta_a))**2)
+    energy_b = np.sqrt(mass_b**2 + (pt_b * np.cosh(eta_b))**2)
+    energy = energy_a + energy_b
+
+    pt = np.hypot(px, py)
+    phi = np.arctan2(py, px)
+    eta = np.arcsinh(pz / max(pt, 1e-15))
+    mass_squared = energy**2 - px**2 - py**2 - pz**2
+    mass = np.sqrt(max(mass_squared, 0.0))
+
+    return pt, eta, phi, mass
 
 
-@nb.njit
+@nb.njit(cache=True)
 def get_lund_decomp(
         pt:np.ndarray,
         eta:np.ndarray,
@@ -241,71 +280,83 @@ def get_lund_decomp(
     if n_lund_vars not in [3, 5]:
         raise ValueError("Only 3 or 5 Lund variables are supported")
 
+    n_initial = len(pt)
+    if n_initial == 0:
+        raise ValueError("Cannot build a Lund tree without constituents")
+
     constituents = np.stack((pt, eta, phi, mass), axis=0)
 
     if save_fractions:
-        e_fraction = fractions[0].astype(np.float64)
-        mu_fraction = fractions[1].astype(np.float64)
-        g_fraction = fractions[2].astype(np.float64)
-        h_fraction = fractions[3].astype(np.float64)
+        e_fraction = np.empty(2 * n_initial - 1, dtype=np.float64)
+        mu_fraction = np.empty(2 * n_initial - 1, dtype=np.float64)
+        g_fraction = np.empty(2 * n_initial - 1, dtype=np.float64)
+        h_fraction = np.empty(2 * n_initial - 1, dtype=np.float64)
+        e_fraction[:n_initial] = fractions[0]
+        mu_fraction[:n_initial] = fractions[1]
+        g_fraction[:n_initial] = fractions[2]
+        h_fraction[:n_initial] = fractions[3]
 
-    # Prepare sparse connection matrix for the Lund tree
-    edges = np.zeros((2, 1), dtype=np.int64)
+    # Each of the n-1 merges adds two parent-child connections in both
+    # directions. Preallocation avoids an array copy at every merge.
+    edges = np.empty((2, 4 * max(n_initial - 1, 0)), dtype=np.int64)
+    edge_offset = 0
 
     pt = pt.astype(np.float64)
     eta = eta.astype(np.float64)
     phi = phi.astype(np.float64)
     mass = mass.astype(np.float64)
 
-    # Features of constituents
-    nodes_pt = pt.astype(np.float64).copy()
-    nodes_eta = eta.astype(np.float64).copy()
-    nodes_phi = phi.astype(np.float64).copy()
-    nodes_mass = mass.astype(np.float64).copy()
-
-    #Displacement Features of constituents
-    nodes_d0 = d0.astype(np.float64).copy() 
-    nodes_dz = dz.astype(np.float64).copy() 
+    # A full binary clustering tree has exactly 2*n-1 nodes. Allocate feature
+    # storage once rather than copying every feature array at each merge.
+    n_tree_nodes = 2 * n_initial - 1
+    nodes_pt = np.empty(n_tree_nodes, dtype=np.float64)
+    nodes_eta = np.empty(n_tree_nodes, dtype=np.float64)
+    nodes_phi = np.empty(n_tree_nodes, dtype=np.float64)
+    nodes_mass = np.empty(n_tree_nodes, dtype=np.float64)
+    nodes_d0 = np.empty(n_tree_nodes, dtype=np.float64)
+    nodes_dz = np.empty(n_tree_nodes, dtype=np.float64)
+    nodes_pt[:n_initial] = pt
+    nodes_eta[:n_initial] = eta
+    nodes_phi[:n_initial] = phi
+    nodes_mass[:n_initial] = mass
+    nodes_d0[:n_initial] = d0
+    nodes_dz[:n_initial] = dz
     
     # New Features of constituents
-    nodes_Delta = np.zeros(len(nodes_pt), dtype=np.float64)
-    nodes_z = np.ones(len(nodes_pt), dtype=np.float64)
-    nodes_psi = np.full(len(nodes_pt), np.pi/4, dtype=np.float64)
-    nodes_kt = np.zeros(len(nodes_pt), dtype=np.float64)
+    nodes_Delta = np.zeros(n_tree_nodes, dtype=np.float64)
+    nodes_z = np.ones(n_tree_nodes, dtype=np.float64)
+    nodes_psi = np.full(n_tree_nodes, np.pi/4, dtype=np.float64)
+    nodes_kt = np.zeros(n_tree_nodes, dtype=np.float64)
 
     # Prepare index map to correctly build the Lund tree
     index_list = [i for i in range(constituents.shape[1])]
-
-    first_clustering = True
+    next_node_index = n_initial
 
     # Start the actual CA clustering
     while constituents.shape[1] > 1:
 
         dij = get_dij(constituents)
 
-        # Avoiding the minimum distance to be the trivial 0 of each constituent with itself
-        np.fill_diagonal(dij, np.inf)
-
         # Get pair with minimum distance
         i =  np.argmin(dij) // dij.shape[0]
         j =  np.argmin(dij) % dij.shape[0]
 
         # Get index of new node in the tree
-        k = nodes_pt.shape[0]
+        k = next_node_index
+        next_node_index += 1
 
         # Cluster the pair together
-        new_constituent = cluster_constituents(constituents, i, j)
+        new_pt, new_eta, new_phi, new_mass = cluster_constituents(constituents, i, j)
 
-        new_d0 = (nodes_d0[i] + nodes_d0[j])/2 
-        new_dz = (nodes_dz[i] + nodes_dz[j])/2 
+        new_d0 = (nodes_d0[index_list[i]] + nodes_d0[index_list[j]]) / 2
+        new_dz = (nodes_dz[index_list[i]] + nodes_dz[index_list[j]]) / 2
 
-        nodes_d0 = np.append(nodes_d0, new_d0) 
-        nodes_dz = np.append(nodes_dz, new_dz) 
-
-        nodes_pt = np.append(nodes_pt, new_constituent.pt)
-        nodes_eta = np.append(nodes_eta, new_constituent.eta)
-        nodes_phi = np.append(nodes_phi, new_constituent.phi)
-        nodes_mass = np.append(nodes_mass, new_constituent.mass)
+        nodes_d0[k] = new_d0
+        nodes_dz[k] = new_dz
+        nodes_pt[k] = new_pt
+        nodes_eta[k] = new_eta
+        nodes_phi[k] = new_phi
+        nodes_mass[k] = new_mass
         
         # Order indices by constituent pt
         if constituents[0,i] < constituents[0,j]:
@@ -314,9 +365,11 @@ def get_lund_decomp(
             i_lo, i_hi = (j, i)
         
         # New Features for clustered particle
+        rapidity_i = get_rapidity(constituents[0,i], constituents[1,i], constituents[3,i])
+        rapidity_j = get_rapidity(constituents[0,j], constituents[1,j], constituents[3,j])
         Delta = get_delta(
-            get_rapidity(constituents[0,i], constituents[1,i], constituents[3,i]),
-            get_rapidity(constituents[0,j], constituents[1,j], constituents[3,j]),
+            rapidity_i,
+            rapidity_j,
             constituents[2,i],
             constituents[2,j]
         )
@@ -332,46 +385,37 @@ def get_lund_decomp(
             raise ValueError("NaN in Delta")
         
         z = get_z(constituents[0,i], constituents[0,j])
-        psi = get_psi(
-            get_rapidity(constituents[0,i_lo], constituents[1,i_lo], constituents[3,i_lo]),
-            get_rapidity(constituents[0,i_hi], constituents[1,i_hi], constituents[3,i_hi]),
-            constituents[2,i_lo],
-            constituents[2,i_hi]
-        )
+        if i_lo == i:
+            psi = get_psi(rapidity_i, rapidity_j, constituents[2,i], constituents[2,j])
+        else:
+            psi = get_psi(rapidity_j, rapidity_i, constituents[2,j], constituents[2,i])
         kt = get_kt(constituents[0,i], constituents[0,j], Delta)
         
-        nodes_Delta = np.append(nodes_Delta, Delta)
-        nodes_z = np.append(nodes_z, z)
-        nodes_psi = np.append(nodes_psi, psi)
-        nodes_kt = np.append(nodes_kt, kt)
+        nodes_Delta[k] = Delta
+        nodes_z[k] = z
+        nodes_psi[k] = psi
+        nodes_kt[k] = kt
 
         if save_fractions:
             # Energy fractions of the current pseudojets
             energy_i = get_energy(constituents[0,i], constituents[1,i], constituents[3,i])
             energy_j = get_energy(constituents[0,j], constituents[1,j], constituents[3,j])
-            energy_new = get_energy(new_constituent.pt, new_constituent.eta, new_constituent.mass)
-            e_fraction = np.append(e_fraction, (energy_i*e_fraction[index_list[i]] + energy_j*e_fraction[index_list[j]]) / energy_new)
-            mu_fraction = np.append(mu_fraction, (energy_i*mu_fraction[index_list[i]] + energy_j*mu_fraction[index_list[j]]) / energy_new)
-            g_fraction = np.append(g_fraction, (energy_i*g_fraction[index_list[i]] + energy_j*g_fraction[index_list[j]]) / energy_new)
-            h_fraction = np.append(h_fraction, (energy_i*h_fraction[index_list[i]] + energy_j*h_fraction[index_list[j]]) / energy_new)
+            energy_new = get_energy(new_pt, new_eta, new_mass)
+            e_fraction[k] = (energy_i*e_fraction[index_list[i]] + energy_j*e_fraction[index_list[j]]) / energy_new
+            mu_fraction[k] = (energy_i*mu_fraction[index_list[i]] + energy_j*mu_fraction[index_list[j]]) / energy_new
+            g_fraction[k] = (energy_i*g_fraction[index_list[i]] + energy_j*g_fraction[index_list[j]]) / energy_new
+            h_fraction[k] = (energy_i*h_fraction[index_list[i]] + energy_j*h_fraction[index_list[j]]) / energy_new
         
         # Add connections to the tree
         # This construction ensures that each clustered step is
         # two-way connected to its mother constituents
-        if first_clustering:
-            edges = np.array([
-                [index_list[i], index_list[j], k, k],
-                [k, k, index_list[i], index_list[j]]
-            ], dtype=np.int64
-            )
-            first_clustering = False
-        else:
-            new_edges = np.array([
-                [index_list[i], index_list[j], k, k],
-                [k, k, index_list[i], index_list[j]]
-            ], dtype=np.int64
-            )
-            edges = np.hstack((edges, new_edges))
+        edges[0, edge_offset:edge_offset + 4] = (
+            index_list[i], index_list[j], k, k
+        )
+        edges[1, edge_offset:edge_offset + 4] = (
+            k, k, index_list[i], index_list[j]
+        )
+        edge_offset += 4
 
         # Update the index map
         index_list = [idx for l, idx in enumerate(index_list) if l not in (i,j)] + [k]
@@ -382,25 +426,25 @@ def get_lund_decomp(
             pt[:min(i,j)], 
             pt[min(i,j)+1:max(i,j)], 
             pt[max(i,j)+1:], 
-            np.array([new_constituent.pt])
+            np.array([new_pt])
         ))
         eta = np.hstack(( 
             eta[:min(i,j)], 
             eta[min(i,j)+1:max(i,j)], 
             eta[max(i,j)+1:], 
-            np.array([new_constituent.eta])
+            np.array([new_eta])
         ))
         phi = np.hstack(( 
             phi[:min(i,j)], 
             phi[min(i,j)+1:max(i,j)], 
             phi[max(i,j)+1:], 
-            np.array([new_constituent.phi])
+            np.array([new_phi])
         ))
         mass = np.hstack(( 
             mass[:min(i,j)], 
             mass[min(i,j)+1:max(i,j)], 
             mass[max(i,j)+1:], 
-            np.array([new_constituent.mass])
+            np.array([new_mass])
         ))
 
         constituents = np.stack((pt, eta, phi, mass), axis=0)
