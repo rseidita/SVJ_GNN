@@ -1,8 +1,10 @@
 import collections
 import concurrent.futures
+import hashlib
 import multiprocessing
 import os
 import pickle
+import numpy as np
 import uproot
 import torch
 from torch_geometric.data import Dataset, Data
@@ -13,6 +15,13 @@ from utils.GraphBuilder import (
     build_pfnano_jet_graph,
     pfnano_branches,
 )
+from utils.Cuts import (
+    CUT_BRANCHES,
+    cuts_fingerprint,
+    event_cut_mask,
+    jet_cut_mask,
+)
+from utils.FileLists import resolve_file_list
 
 
 _GRAPH_WORKER_PRODUCER = None
@@ -793,3 +802,126 @@ class JetGraphProducer(Dataset):
             meta,
             os.path.join(self.processed_dir, f"{self.output_dataset_name}_meta.pt"),
         )
+
+
+class FileListGraphProducer(JetGraphProducer):
+    """Produce graphs from ROOT files named in a text file list.
+
+    Differs from :class:`JetGraphProducer` in two ways only:
+
+    - the input files come from a text list (or an explicit list of paths),
+      instead of every ``.root`` file inside ``root``. ``root`` is therefore
+      only the output location of the ``processed/`` directory, which makes it
+      straightforward to give each condor or crab shard its own output area;
+    - the selections in :mod:`utils.Cuts` are applied to every event and jet,
+      identically for signal, background and data.
+
+    ``save_jet_idx`` is forced on because the jet index is needed to evaluate
+    the per-jet selection, and ``CUT_BRANCHES`` are appended to
+    ``extra_obs_to_load`` so the cut variables are read from the file.
+
+    Args:
+        root (str): Output directory for the processed dataset.
+        output_dataset_name (str): Name of the processed output dataset.
+        file_list (str): Path to a text file with one ROOT path per line.
+        file_paths (list): Explicit ROOT paths, used instead of ``file_list``.
+
+    All remaining arguments are passed through to :class:`JetGraphProducer`.
+    """
+
+    def __init__(
+        self,
+        root,
+        output_dataset_name,
+        file_list=None,
+        file_paths=None,
+        **kwargs,
+    ):
+        if (file_list is None) == (file_paths is None):
+            raise ValueError(
+                "Provide exactly one of file_list or file_paths"
+            )
+        if file_paths is None:
+            file_paths = resolve_file_list(file_list)
+        self._file_paths = [str(path) for path in file_paths]
+        if not self._file_paths:
+            raise ValueError("No input ROOT files were provided")
+        self.file_list = file_list
+
+        # The jet index identifies which jet a graph came from, which the
+        # per-jet selection needs.
+        kwargs["save_jet_idx"] = True
+        extra_obs_to_load = list(kwargs.pop("extra_obs_to_load", None) or [])
+        for branch in CUT_BRANCHES:
+            if branch not in extra_obs_to_load:
+                extra_obs_to_load.append(branch)
+        kwargs["extra_obs_to_load"] = extra_obs_to_load
+
+        os.makedirs(root, exist_ok=True)
+        super().__init__(root, output_dataset_name, **kwargs)
+
+    @property
+    def raw_file_names(self):
+        return list(self._file_paths)
+
+    def _processing_config(self):
+        config = super()._processing_config()
+        config["cuts_fingerprint"] = cuts_fingerprint()
+        config["cut_branches"] = sorted(CUT_BRANCHES)
+        config["input_files_sha256"] = hashlib.sha256(
+            "\n".join(self._file_paths).encode()
+        ).hexdigest()
+        return config
+
+    def process_event(
+        self,
+        i_start,
+        i_stop,
+        events,
+        xsec,
+        gen_events_before_selection,
+        total_events,
+        events_to_process,
+        show_progress=None,
+    ):
+        """Apply the shared selections, then build graphs for what survives."""
+        events_in_range = events[i_start:i_stop]
+        mask = np.asarray(event_cut_mask(events_in_range), dtype=bool)
+        if mask.shape != (len(events_in_range),):
+            raise ValueError(
+                "event_cut_mask must return one boolean per event, got shape "
+                f"{mask.shape} for {len(events_in_range)} events"
+            )
+
+        surviving = np.flatnonzero(mask)
+        if not len(surviving):
+            return []
+
+        selected_events = events_in_range[mask]
+        config = self._graph_build_config()
+        graphs = []
+
+        # One event at a time, so that the jet selection can be evaluated
+        # against the event a graph came from.
+        for position, entry_offset in enumerate(surviving):
+            event_graphs = super().process_event(
+                position,
+                position + 1,
+                selected_events,
+                xsec,
+                gen_events_before_selection,
+                total_events,
+                events_to_process,
+                show_progress=False,
+            )
+            for graph in event_graphs:
+                jet_index = int(graph.jet_idx[0])
+                if not jet_cut_mask(selected_events[position], jet_index, config):
+                    continue
+                if self.save_event_number:
+                    graph.event_number = torch.tensor(
+                        [i_start + int(entry_offset)], dtype=torch.long
+                    )
+                graphs.append(graph)
+
+        return graphs

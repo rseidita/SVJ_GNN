@@ -3,6 +3,7 @@ from collections import deque
 import numpy as np
 import torch
 from torch_geometric.transforms import BaseTransform
+from tqdm import tqdm
 import numba as nb
 
 # Avoid nasty interplays of torch and numba
@@ -30,6 +31,60 @@ class OnTheFlyNormalizer(BaseTransform):
                 store[key] = value
 
         return data
+
+
+def _node_weights(batch):
+    """Per-node event weights, falling back to unit weights.
+
+    Graphs produced with ``weights=None``, which is the only option for data
+    samples and for files without a Metadata tree, carry no ``w`` attribute.
+    """
+    weights = getattr(batch, "w", None)
+    if weights is None:
+        return torch.ones(batch.x.shape[0], dtype=torch.float64)
+    return weights.reshape(-1)[batch.batch].to(torch.float64)
+
+
+def compute_normalization_stats(loader, n_features, verbose=False):
+    """Event-weighted mean and standard deviation of the node features.
+
+    Statistics are accumulated over whatever partition *loader* selects, so
+    pass a loader restricted to the training partition. The returned tensors
+    are ready for ``OnTheFlyNormalizer(["x"], means, stds)``.
+    """
+    feature_sum = torch.zeros(n_features, dtype=torch.float64)
+    total_node_weight = torch.tensor(0.0, dtype=torch.float64)
+
+    for batch in tqdm(
+        loader, desc="Computing training means", disable=not verbose
+    ):
+        node_weights = _node_weights(batch)
+        features = batch.x.to(torch.float64)
+        feature_sum += (features * node_weights[:, None]).sum(dim=0)
+        total_node_weight += node_weights.sum()
+
+    if total_node_weight <= 0:
+        raise ValueError(
+            "Total node weight is not positive; cannot compute normalization"
+        )
+    means = feature_sum / total_node_weight
+
+    variance_sum = torch.zeros_like(means)
+    for batch in tqdm(
+        loader,
+        desc="Computing training standard deviations",
+        disable=not verbose,
+    ):
+        node_weights = _node_weights(batch)
+        features = batch.x.to(torch.float64)
+        variance_sum += (
+            (features - means).square() * node_weights[:, None]
+        ).sum(dim=0)
+
+    stds = torch.sqrt(variance_sum / total_node_weight)
+    # A constant feature would otherwise divide by zero.
+    stds[stds == 0] = 1.0
+    return means.float(), stds.float()
 
 # Define binary tree structure for Lund decomposition
 class Node:

@@ -1,0 +1,63 @@
+{
+  "graph": {
+    "jet_collection": "FatJet",
+    "n_store_jets": 2,
+    "use_lund_decomp": true,
+    "n_lund_vars": 5,
+    "save_energy_fractions": true,
+    "save_4vectors_in_lund_tree": false,
+    "use_displacement": false,
+    "kt_cut": null
+  },
+  "production": {
+    "output_dir": "data",
+    "graphs_per_chunk": 1000,
+    "event_batch_size": 100,
+    "num_workers": 4,
+    "worker_prefetch": 2
+  },
+  "training": {
+    "epochs": 1,
+    "batch_size": 64,
+    "learning_rate": 0.001,
+    "alpha": 1.0,
+    "split_seed": 12345,
+    "sampling": "weighted",
+    "train_window": [0.0, 0.7],
+    "validation_window": [0.7, 0.85],
+    "test_window": [0.85, 1.0],
+    "comet_project": "svj-gae"
+  },
+  "model": {
+    "spec": "GraphAE.graphAE",
+    "kwargs": {
+      "architecture": [256, 128, 64, 32, 16, 8, 4]
+    }
+  },
+  "samples": {
+    "smoke": {
+      "role": "data",
+      "file_list": "filelists/smoke_part14.txt",
+      "weights": null,
+      "label": 0
+    },
+    "background_example": {
+      "role": "background",
+      "file_list": "filelists/background_example.txt",
+      "weights": "xsec",
+      "label": 0
+    },
+    "signal_example": {
+      "role": "signal",
+      "file_list": "filelists/signal_example.txt",
+      "weights": "xsec",
+      "label": 1
+    },
+    "data_example": {
+      "role": "data",
+      "file_list": "filelists/data_example.txt",
+      "weights": null,
+      "label": 0
+    }
+  }
+}

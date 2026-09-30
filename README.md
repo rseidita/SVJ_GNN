@@ -418,6 +418,120 @@ utils/RootGraphScorer.py    Streaming, ordered ROOT inference
 utils/ScoreProducer.py      ROOT scoring workflow
 ```
 
+## GAE training pipeline
+
+A set of command line scripts wraps the modules above into a pipeline that
+reads ROOT files from text file lists, applies one shared selection to
+signal, background and data, trains a graph autoencoder, and makes the
+performance plots. It runs locally, under HTCondor, or under CRAB.
+
+Everything is driven by `gae_config.json`: the graph representation, the
+production and training settings, the model, and the samples. Each sample
+declares a role (`signal`, `background` or `data`), a file list, and whether
+to use cross section weights.
+
+### Environment
+
+The LCG view provides every dependency except `comet-ml`:
+
+```bash
+cd SVJ_GNN
+source setup_gae_env.sh
+```
+
+To add comet logging, create a virtual environment on top of the view once.
+`setup_gae_env.sh` then picks it up automatically:
+
+```bash
+python -m venv --system-site-packages .venv-gae
+source .venv-gae/bin/activate
+python -m pip install -r requirements-gae.txt
+```
+
+Without it the pipeline still runs; `train_gae.py` falls back to local-only
+logging, and `--no-comet` selects that explicitly.
+
+### Selections
+
+`utils/Cuts.py` is the only place selections are defined. `event_cut_mask`
+and `jet_cut_mask` ship as pass-through placeholders; fill them in and every
+stage picks them up. List any branch a cut needs in `CUT_BRANCHES` so it is
+read from the file. Changing a selection changes the fingerprint stored in
+the processed dataset metadata, so stale graph caches are rejected instead of
+being silently reused.
+
+### Running the pipeline
+
+```bash
+# 1. Build graph datasets from each sample's file list.
+python produce_graphs.py --samples background_example signal_example
+
+# 2. Train the autoencoder on the background samples.
+python train_gae.py --epochs 20
+
+# 3. Score every sample straight from the ROOT files.
+python score_gae.py --checkpoint training/GraphAE_graphAE/checkpoint.pt
+
+# 4. Make the plots.
+python plot_gae.py --history training/GraphAE_graphAE/history.json
+```
+
+Step 4 writes the loss curves, the reconstruction-loss distributions for
+signal, background and data, the normalized number of surviving events
+against the loss threshold, the ROC curve, and the significance improvement
+against background efficiency, together with a `histograms.root` holding the
+TH1 versions. Adding `--checkpoint` and `--residual-sample` also produces the
+per-feature reconstruction residuals and the latent-space distributions.
+
+A quick end-to-end check on `part-14.root` in the parent directory (scouting
+**data**, not MC). Data files have no `Metadata` tree, so the `smoke` sample
+uses `weights: null`; only MC samples should set `weights: "xsec"`.
+
+```bash
+python produce_graphs.py --samples smoke --max-events 200 --num-workers 1
+python train_gae.py --train-on smoke --epochs 1 --no-comet
+python score_gae.py --checkpoint training/GraphAE_graphAE/checkpoint.pt --samples smoke
+python plot_gae.py --history training/GraphAE_graphAE/history.json
+```
+
+`--train-on smoke` is only a plumbing check with one file. For a real
+autoencoder you normally train on background MC from `background_example`.
+The ROC and SIC plots need both a signal and a background sample, so they are
+skipped for this single-sample check.
+
+### Choosing a model
+
+The pipeline never names an architecture. `architectures/ModelRegistry.py`
+resolves a `"Module.ClassName"` spec inside `architectures/`, so a new model
+only needs a new file there and a one line change in `gae_config.json`:
+
+```json
+"model": {"spec": "MyNewAE.myNewAE", "kwargs": {"latent_dim": 8}}
+```
+
+`kwargs` is passed straight to the constructor, so a model with different
+arguments needs no pipeline change. A model must provide `forward`,
+`score_batch`, and either `training_loss(batch, alpha)` or both `edges_loss`
+and `features_loss`. Defining `training_loss` lets a model use its own
+objective; everything else falls back to `edges_loss + alpha * features_loss`.
+
+### Batch submission
+
+Graph production and scoring are one job per shard of a file list. Training
+is a single job, on a GPU when one is requested.
+
+```bash
+python condor/submit_condor.py --stage produce --samples background_example \
+    --files-per-job 5
+python condor/submit_condor.py --stage train --request-gpus 1
+condor_submit condor/submit/produce.jdl
+```
+
+CRAB covers the same per-file production and scoring stages through
+`crab/crabConfig_gae.py`, which feeds `Data.userInputFiles` from a file list
+and runs `crab/crab_script.sh` as its `scriptExe`. Training is deliberately
+not a CRAB workflow: a long GPU job does not fit the model.
+
 ## Contact
 
 roberto.seidita@cern.ch
