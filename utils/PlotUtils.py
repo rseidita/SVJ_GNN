@@ -1,7 +1,17 @@
 from numpy import random
 import networkx as nx
+import numpy as np
 from torch_geometric.utils import to_networkx
 import matplotlib.pyplot as plt
+
+from utils.MetricUtils import (
+    auc,
+    efficiency_curve,
+    max_sic,
+    roc_curve,
+    sic,
+    weighted_histogram,
+)
 
 
 def hierarchy_pos(G, root=None, width=1., vert_gap = 0.2, vert_loc = 0, leaf_vs_root_factor = 0.5):
@@ -137,3 +147,335 @@ def plot_tree(graph, idx_of_feature_to_plot, label, file_name, root=None, show=F
     plt.savefig(f"{file_name}.pdf")
     if show: plt.show()
     plt.close()
+
+
+# ----------------------------------------------------------------------
+# Autoencoder diagnostics, in CMS style, with TH1 histogram output.
+# ----------------------------------------------------------------------
+
+def set_cms_style():
+    """Apply the CMS matplotlib style from mplhep."""
+    import mplhep as hep
+
+    plt.style.use(hep.style.CMS)
+
+
+def cms_label(ax, label="Preliminary", lumi=None, com=13.6):
+    """Draw the CMS label on *ax*."""
+    import mplhep as hep
+
+    hep.cms.label(label, ax=ax, lumi=lumi, com=com, data=True)
+
+
+def to_th1(counts, edges, name, title=""):
+    """Build a ROOT TH1D from a numpy histogram."""
+    import ROOT
+
+    edges = np.asarray(edges, dtype=np.float64)
+    counts = np.asarray(counts, dtype=np.float64)
+    histogram = ROOT.TH1D(name, title, len(counts), edges)
+    for index, value in enumerate(counts):
+        histogram.SetBinContent(index + 1, value)
+    return histogram
+
+
+def write_th1s(path, histograms):
+    """Write TH1 objects, keyed by name, into one ROOT file."""
+    import ROOT
+
+    output_file = ROOT.TFile(path, "RECREATE")
+    for name, histogram in histograms.items():
+        histogram.Write(name)
+    output_file.Close()
+    return path
+
+
+def _save(figure, file_name, formats=("pdf",), show=False):
+    for extension in formats:
+        figure.savefig(f"{file_name}.{extension}", bbox_inches="tight")
+    if show:
+        plt.show()
+    plt.close(figure)
+
+
+def plot_loss_curves(history, file_name, formats=("pdf",), show=False):
+    """Per-batch and per-epoch training curves from a training history."""
+    import mplhep as hep
+
+    set_cms_style()
+    figure, (batch_axes, epoch_axes) = plt.subplots(
+        1, 2, figsize=(18, 7)
+    )
+
+    batch_axes.plot(history["batch_total"], label="Total")
+    batch_axes.plot(history["batch_edges"], label="Edges")
+    batch_axes.plot(history["batch_nodes"], label="Nodes")
+    batch_axes.set_xlabel("Training batch")
+    batch_axes.set_ylabel("Loss")
+    batch_axes.set_yscale("log")
+    batch_axes.legend()
+    cms_label(batch_axes)
+
+    epochs = range(len(history["epoch_train"]))
+    train_totals = [values[0] for values in history["epoch_train"]]
+    epoch_axes.plot(epochs, train_totals, marker="o", label="Train")
+    validation = [
+        values[0] if values is not None else np.nan
+        for values in history.get("epoch_validation", [])
+    ]
+    if validation and not np.all(np.isnan(validation)):
+        epoch_axes.plot(
+            epochs, validation, marker="s", label="Validation"
+        )
+    epoch_axes.set_xlabel("Epoch")
+    epoch_axes.set_ylabel("Total loss")
+    epoch_axes.set_yscale("log")
+    epoch_axes.legend()
+    cms_label(epoch_axes)
+
+    _save(figure, file_name, formats, show)
+
+
+def plot_score_distributions(
+    samples,
+    file_name,
+    bins=50,
+    density=True,
+    formats=("pdf",),
+    show=False,
+):
+    """Reconstruction-loss histograms for every sample, overlaid.
+
+    *samples* maps a label to ``(scores, weights)``. Returns the TH1
+    histograms, so they can be written to a ROOT file.
+    """
+    import mplhep as hep
+
+    set_cms_style()
+
+    all_scores = np.concatenate(
+        [np.asarray(scores) for scores, _ in samples.values()]
+    )
+    edges = np.histogram_bin_edges(all_scores, bins=bins)
+
+    figure, axes = plt.subplots(figsize=(10, 8))
+    histograms = {}
+    for label, (scores, weights) in samples.items():
+        counts, _ = weighted_histogram(
+            scores, edges, weights=weights, density=density
+        )
+        hep.histplot(
+            counts, edges, ax=axes, label=label, histtype="step", linewidth=2
+        )
+        histograms[f"score_{label}"] = to_th1(
+            counts, edges, f"score_{label}", "Reconstruction loss"
+        )
+
+    axes.set_xlabel("Reconstruction loss")
+    axes.set_ylabel("Normalized events" if density else "Events")
+    axes.legend()
+    cms_label(axes)
+    _save(figure, file_name, formats, show)
+    return histograms
+
+
+def plot_loss_efficiency(
+    samples, file_name, formats=("pdf",), show=False
+):
+    """Normalized number of events surviving a cut on the loss.
+
+    *samples* maps a label to ``(scores, weights)``. The curve is the
+    weighted fraction of entries with a loss above the threshold.
+    """
+    set_cms_style()
+    figure, axes = plt.subplots(figsize=(10, 8))
+
+    for label, (scores, weights) in samples.items():
+        thresholds, efficiency = efficiency_curve(scores, weights)
+        axes.plot(thresholds, efficiency, label=label, linewidth=2)
+
+    axes.set_xlabel("Reconstruction loss threshold")
+    axes.set_ylabel("Normalized number of events")
+    axes.set_yscale("log")
+    axes.legend()
+    cms_label(axes)
+    _save(figure, file_name, formats, show)
+
+
+def plot_roc(
+    scores_signal,
+    scores_background,
+    file_name,
+    weights_signal=None,
+    weights_background=None,
+    formats=("pdf",),
+    show=False,
+):
+    """Signal against background efficiency, with the area under the curve."""
+    set_cms_style()
+    fpr, tpr, _ = roc_curve(
+        scores_signal,
+        scores_background,
+        weights_signal,
+        weights_background,
+    )
+
+    figure, axes = plt.subplots(figsize=(10, 8))
+    axes.plot(fpr, tpr, linewidth=2, label=f"AUC = {auc(fpr, tpr):.3f}")
+    axes.plot([0, 1], [0, 1], linestyle="--", color="grey", linewidth=1)
+    axes.set_xlabel("Background efficiency")
+    axes.set_ylabel("Signal efficiency")
+    axes.legend()
+    cms_label(axes)
+    _save(figure, file_name, formats, show)
+    return fpr, tpr
+
+
+def plot_sic_vs_fpr(
+    scores_signal,
+    scores_background,
+    file_name,
+    weights_signal=None,
+    weights_background=None,
+    min_fpr=1e-4,
+    formats=("pdf",),
+    show=False,
+):
+    """Significance improvement against background efficiency."""
+    set_cms_style()
+    fpr, tpr, _ = roc_curve(
+        scores_signal,
+        scores_background,
+        weights_signal,
+        weights_background,
+    )
+    fpr_values, sic_values = sic(tpr, fpr, min_fpr=min_fpr)
+
+    figure, axes = plt.subplots(figsize=(10, 8))
+    axes.plot(
+        fpr_values,
+        sic_values,
+        linewidth=2,
+        label=f"max SIC = {max_sic(tpr, fpr, min_fpr=min_fpr):.2f}",
+    )
+    axes.axhline(1.0, linestyle="--", color="grey", linewidth=1)
+    axes.set_xscale("log")
+    axes.set_xlabel("Background efficiency")
+    axes.set_ylabel(r"$\varepsilon_S/\sqrt{\varepsilon_B}$")
+    axes.legend()
+    cms_label(axes)
+    _save(figure, file_name, formats, show)
+
+
+def plot_feature_residuals(
+    model,
+    loader,
+    file_name,
+    device="cpu",
+    max_batches=20,
+    bins=50,
+    formats=("pdf",),
+    show=False,
+):
+    """Input minus reconstructed node feature, one panel per feature."""
+    import torch
+
+    if not callable(getattr(model, "forward", None)):
+        print("Model has no forward method; skipping residual plot")
+        return
+
+    set_cms_style()
+    model.eval()
+    residuals = []
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            if index >= max_batches:
+                break
+            batch = batch.to(device)
+            reconstructed = model(batch.x, batch.edge_index)
+            if isinstance(reconstructed, tuple):
+                reconstructed = reconstructed[0]
+            residuals.append(
+                (batch.x - reconstructed).detach().cpu().numpy()
+            )
+
+    if not residuals:
+        print("No batches available; skipping residual plot")
+        return
+
+    residuals = np.concatenate(residuals)
+    n_features = residuals.shape[1]
+    n_columns = min(3, n_features)
+    n_rows = int(np.ceil(n_features / n_columns))
+    figure, axes = plt.subplots(
+        n_rows, n_columns, figsize=(6 * n_columns, 5 * n_rows), squeeze=False
+    )
+
+    import mplhep as hep
+
+    for feature in range(n_features):
+        axis = axes[feature // n_columns][feature % n_columns]
+        counts, edges = np.histogram(residuals[:, feature], bins=bins)
+        hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2)
+        axis.set_xlabel(f"Feature {feature} residual")
+        axis.set_ylabel("Nodes")
+    for empty in range(n_features, n_rows * n_columns):
+        axes[empty // n_columns][empty % n_columns].axis("off")
+
+    _save(figure, file_name, formats, show)
+
+
+def plot_latent_distributions(
+    model,
+    loader,
+    file_name,
+    device="cpu",
+    max_batches=20,
+    bins=50,
+    formats=("pdf",),
+    show=False,
+):
+    """Distribution of every latent dimension of the encoder."""
+    import torch
+
+    encoder = getattr(model, "encoder", None)
+    if encoder is None:
+        print("Model exposes no encoder; skipping latent plot")
+        return
+
+    set_cms_style()
+    model.eval()
+    latents = []
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            if index >= max_batches:
+                break
+            batch = batch.to(device)
+            latents.append(
+                encoder(batch.x, batch.edge_index).detach().cpu().numpy()
+            )
+
+    if not latents:
+        print("No batches available; skipping latent plot")
+        return
+
+    latents = np.concatenate(latents)
+    n_dimensions = latents.shape[1]
+    n_columns = min(4, n_dimensions)
+    n_rows = int(np.ceil(n_dimensions / n_columns))
+    figure, axes = plt.subplots(
+        n_rows, n_columns, figsize=(5 * n_columns, 4 * n_rows), squeeze=False
+    )
+
+    import mplhep as hep
+
+    for dimension in range(n_dimensions):
+        axis = axes[dimension // n_columns][dimension % n_columns]
+        counts, edges = np.histogram(latents[:, dimension], bins=bins)
+        hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2)
+        axis.set_xlabel(f"Latent {dimension}")
+        axis.set_ylabel("Nodes")
+    for empty in range(n_dimensions, n_rows * n_columns):
+        axes[empty // n_columns][empty % n_columns].axis("off")
+
+    _save(figure, file_name, formats, show)
