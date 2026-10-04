@@ -1,0 +1,457 @@
+  Trigger SF: no file at /uscms_data/d3/nparmar/SVJScouting/trigger_sf/trigger_sf_counting_2017.json; MC weights omit trigger correction
+
+--- 2017 data (1583 files) ---
+
+--- 2017 qcd (151 files) ---
+  Skip signal file (no CutFlow): part-17.root
+  Skip signal file (no CutFlow): part-18.root
+  Skipped 2 signal file(s) without CutFlow or unreadable
+
+--- 2017 s-channel_mMed-1000_mDark-20_rinv-0.3 (17 files) ---
+
+--- 2017 s-channel_mMed-1000_mDark-20_rinv-0.5 (12 files) ---
+
+--- 2017 s-channel_mMed-1000_mDark-20_rinv-0.7 (6 files) ---
+
+--- 2017 s-channel_mMed-1100_mDark-20_rinv-0.3 (24 files) ---
+
+--- 2017 s-channel_mMed-1100_mDark-20_rinv-0.5 (16 files) ---
+
+--- 2017 s-channel_mMed-1100_mDark-20_rinv-0.7 (6 files) ---
+
+--- 2017 s-channel_mMed-1200_mDark-20_rinv-0.3 (28 files) ---
+
+--- 2017 s-channel_mMed-1200_mDark-20_rinv-0.5 (20 files) ---
+
+--- 2017 s-channel_mMed-1200_mDark-20_rinv-0.7 (9 files) ---
+
+--- 2017 s-channel_mMed-1300_mDark-20_rinv-0.3 (34 files) ---
+
+--- 2017 s-channel_mMed-1300_mDark-20_rinv-0.5 (25 files) ---
+
+--- 2017 s-channel_mMed-1300_mDark-20_rinv-0.7 (10 files) ---
+
+--- 2017 s-channel_mMed-1400_mDark-20_rinv-0.3 (38 files) ---
+
+--- 2017 s-channel_mMed-1400_mDark-20_rinv-0.5 (30 files) ---
+
+--- 2017 s-channel_mMed-1400_mDark-20_rinv-0.7 (13 files) ---
+
+--- 2017 s-channel_mMed-1500_mDark-20_rinv-0.3 (43 files) ---
+
+--- 2017 s-channel_mMed-1500_mDark-20_rinv-0.5 (34 files) ---
+
+--- 2017 s-channel_mMed-1500_mDark-20_rinv-0.7 (15 files) ---
+
+--- 2017 s-channel_mMed-500_mDark-20_rinv-0.3 (1 files) ---
+
+--- 2017 s-channel_mMed-500_mDark-20_rinv-0.7 (1 files) ---
+
+--- 2017 s-channel_mMed-600_mDark-20_rinv-0.3 (2 files) ---
+
+--- 2017 s-channel_mMed-600_mDark-20_rinv-0.5 (1 files) ---
+
+--- 2017 s-channel_mMed-600_mDark-20_rinv-0.7 (1 files) ---
+
+--- 2017 s-channel_mMed-700_mDark-20_rinv-0.3 (3 files) ---
+
+--- 2017 s-channel_mMed-700_mDark-20_rinv-0.5 (3 files) ---
+
+--- 2017 s-channel_mMed-700_mDark-20_rinv-0.7 (2 files) ---
+
+--- 2017 s-channel_mMed-800_mDark-20_rinv-0.3 (7 files) ---
+
+--- 2017 s-channel_mMed-800_mDark-20_rinv-0.5 (5 files) ---
+
+--- 2017 s-channel_mMed-800_mDark-20_rinv-0.7 (2 files) ---
+  Skip signal file (no CutFlow): part-12.root
+  Skipped 1 signal file(s) without CutFlow or unreadable
+
+--- 2017 s-channel_mMed-900_mDark-20_rinv-0.3 (12 files) ---
+
+--- 2017 s-channel_mMed-900_mDark-20_rinv-0.5 (8 files) ---
+
+--- 2017 s-channel_mMed-900_mDark-20_rinv-0.7 (4 files) ---
+
+Weighting note:
+  N_pass   = unweighted skim events passing all GAE cuts
+  W_pass   = MC sum of xsec*L*1e3/N_initial*prefire*(genWeightPU/genWeight)
+             (x trigger SF on MT01FatJetMET when enabled)
+  N_phys   = N_pass for data; W_pass for MC (lumi already in event weights)
+  L        = 42.07 fb-1
+  Partial reads/shards bias MC weights that use full-dataset N_gen.
+
+--- 2017 data ---
+  N_pass (counts)     1540906
+  W_pass (MC weight)  1.54091e+06
+  N_phys              1.541e+06
+Cutflow 2017 data cutflow
+                                 events     abs.     rel.
+  skim                          8088850   1.0000   1.0000
+  isGood j0,j1                  8088846   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2     1540906   0.1905   0.1905
+
+--- 2017 QCD (pooled HT) ---
+  N_pass (counts)     75406
+  W_pass (MC weight)  879923
+  N_phys              8.799e+05
+Cutflow 2017 QCD (pooled HT) cutflow
+                                 events     abs.     rel.
+  skim                           627498   1.0000   1.0000
+  isGood j0,j1                   627498   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       75406   0.1202   0.1202
+
+--- 2017 signal mMed-1000_mDark-20_rinv-0.3 ---
+  N_pass (counts)     9595
+  W_pass (MC weight)  1968.7
+  N_phys              1969
+Cutflow 2017 signal mMed-1000_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           161192   1.0000   1.0000
+  isGood j0,j1                   161192   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        9595   0.0595   0.0595
+
+--- 2017 signal mMed-1000_mDark-20_rinv-0.5 ---
+  N_pass (counts)     7405
+  W_pass (MC weight)  1521.11
+  N_phys              1521
+Cutflow 2017 signal mMed-1000_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           108865   1.0000   1.0000
+  isGood j0,j1                   108865   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        7405   0.0680   0.0680
+
+--- 2017 signal mMed-1000_mDark-20_rinv-0.7 ---
+  N_pass (counts)     3650
+  W_pass (MC weight)  748.669
+  N_phys              748.7
+Cutflow 2017 signal mMed-1000_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            43775   1.0000   1.0000
+  isGood j0,j1                    43775   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        3650   0.0834   0.0834
+
+--- 2017 signal mMed-1100_mDark-20_rinv-0.3 ---
+  N_pass (counts)     14623
+  W_pass (MC weight)  2015.47
+  N_phys              2015
+Cutflow 2017 signal mMed-1100_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           209646   1.0000   1.0000
+  isGood j0,j1                   209646   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       14623   0.0698   0.0698
+
+--- 2017 signal mMed-1100_mDark-20_rinv-0.5 ---
+  N_pass (counts)     10909
+  W_pass (MC weight)  1505.48
+  N_phys              1505
+Cutflow 2017 signal mMed-1100_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           146451   1.0000   1.0000
+  isGood j0,j1                   146451   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       10909   0.0745   0.0745
+
+--- 2017 signal mMed-1100_mDark-20_rinv-0.7 ---
+  N_pass (counts)     5089
+  W_pass (MC weight)  701.93
+  N_phys              701.9
+Cutflow 2017 signal mMed-1100_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            59073   1.0000   1.0000
+  isGood j0,j1                    59073   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        5089   0.0861   0.0861
+
+--- 2017 signal mMed-1200_mDark-20_rinv-0.3 ---
+  N_pass (counts)     20734
+  W_pass (MC weight)  1974.76
+  N_phys              1975
+Cutflow 2017 signal mMed-1200_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           254623   1.0000   1.0000
+  isGood j0,j1                   254623   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       20734   0.0814   0.0814
+
+--- 2017 signal mMed-1200_mDark-20_rinv-0.5 ---
+  N_pass (counts)     15237
+  W_pass (MC weight)  1452.97
+  N_phys              1453
+Cutflow 2017 signal mMed-1200_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           184315   1.0000   1.0000
+  isGood j0,j1                   184315   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       15237   0.0827   0.0827
+
+--- 2017 signal mMed-1200_mDark-20_rinv-0.7 ---
+  N_pass (counts)     6875
+  W_pass (MC weight)  655.573
+  N_phys              655.6
+Cutflow 2017 signal mMed-1200_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            75803   1.0000   1.0000
+  isGood j0,j1                    75803   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        6875   0.0907   0.0907
+
+--- 2017 signal mMed-1300_mDark-20_rinv-0.3 ---
+  N_pass (counts)     27240
+  W_pass (MC weight)  1830.01
+  N_phys              1830
+Cutflow 2017 signal mMed-1300_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           296155   1.0000   1.0000
+  isGood j0,j1                   296155   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       27240   0.0920   0.0920
+
+--- 2017 signal mMed-1300_mDark-20_rinv-0.5 ---
+  N_pass (counts)     20540
+  W_pass (MC weight)  1380.84
+  N_phys              1381
+Cutflow 2017 signal mMed-1300_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           223423   1.0000   1.0000
+  isGood j0,j1                   223423   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       20540   0.0919   0.0919
+
+--- 2017 signal mMed-1300_mDark-20_rinv-0.7 ---
+  N_pass (counts)     8929
+  W_pass (MC weight)  600.732
+  N_phys              600.7
+Cutflow 2017 signal mMed-1300_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            92850   1.0000   1.0000
+  isGood j0,j1                    92850   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        8929   0.0962   0.0962
+
+--- 2017 signal mMed-1400_mDark-20_rinv-0.3 ---
+  N_pass (counts)     34323
+  W_pass (MC weight)  1655.61
+  N_phys              1656
+Cutflow 2017 signal mMed-1400_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           334978   1.0000   1.0000
+  isGood j0,j1                   334978   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       34323   0.1025   0.1025
+
+--- 2017 signal mMed-1400_mDark-20_rinv-0.5 ---
+  N_pass (counts)     26076
+  W_pass (MC weight)  1258.14
+  N_phys              1258
+Cutflow 2017 signal mMed-1400_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           261183   1.0000   1.0000
+  isGood j0,j1                   261183   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       26076   0.0998   0.0998
+
+--- 2017 signal mMed-1400_mDark-20_rinv-0.7 ---
+  N_pass (counts)     11320
+  W_pass (MC weight)  545.145
+  N_phys              545.1
+Cutflow 2017 signal mMed-1400_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                           111625   1.0000   1.0000
+  isGood j0,j1                   111625   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       11320   0.1014   0.1014
+
+--- 2017 signal mMed-1500_mDark-20_rinv-0.3 ---
+  N_pass (counts)     41165
+  W_pass (MC weight)  1444.88
+  N_phys              1445
+Cutflow 2017 signal mMed-1500_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           367858   1.0000   1.0000
+  isGood j0,j1                   367858   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       41165   0.1119   0.1119
+
+--- 2017 signal mMed-1500_mDark-20_rinv-0.5 ---
+  N_pass (counts)     31830
+  W_pass (MC weight)  1119.72
+  N_phys              1120
+Cutflow 2017 signal mMed-1500_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           298452   1.0000   1.0000
+  isGood j0,j1                   298452   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       31830   0.1067   0.1067
+
+--- 2017 signal mMed-1500_mDark-20_rinv-0.7 ---
+  N_pass (counts)     13783
+  W_pass (MC weight)  484.793
+  N_phys              484.8
+Cutflow 2017 signal mMed-1500_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                           130797   1.0000   1.0000
+  isGood j0,j1                   130797   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       13783   0.1054   0.1054
+
+--- 2017 signal mMed-500_mDark-20_rinv-0.3 ---
+  N_pass (counts)     663
+  W_pass (MC weight)  977.269
+  N_phys              977.3
+Cutflow 2017 signal mMed-500_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                             5534   1.0000   1.0000
+  isGood j0,j1                     5534   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2         663   0.1198   0.1198
+
+--- 2017 signal mMed-500_mDark-20_rinv-0.7 ---
+  N_pass (counts)     617
+  W_pass (MC weight)  914.995
+  N_phys              915
+Cutflow 2017 signal mMed-500_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                             4437   1.0000   1.0000
+  isGood j0,j1                     4437   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2         617   0.1391   0.1391
+
+--- 2017 signal mMed-600_mDark-20_rinv-0.3 ---
+  N_pass (counts)     1139
+  W_pass (MC weight)  1134.35
+  N_phys              1134
+Cutflow 2017 signal mMed-600_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                            10606   1.0000   1.0000
+  isGood j0,j1                    10606   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1139   0.1074   0.1074
+
+--- 2017 signal mMed-600_mDark-20_rinv-0.5 ---
+  N_pass (counts)     1247
+  W_pass (MC weight)  1245.54
+  N_phys              1246
+Cutflow 2017 signal mMed-600_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                            10029   1.0000   1.0000
+  isGood j0,j1                    10029   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1247   0.1243   0.1243
+
+--- 2017 signal mMed-600_mDark-20_rinv-0.7 ---
+  N_pass (counts)     861
+  W_pass (MC weight)  857.084
+  N_phys              857.1
+Cutflow 2017 signal mMed-600_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                             6533   1.0000   1.0000
+  isGood j0,j1                     6533   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2         861   0.1318   0.1318
+
+--- 2017 signal mMed-700_mDark-20_rinv-0.3 ---
+  N_pass (counts)     1890
+  W_pass (MC weight)  1266.93
+  N_phys              1267
+Cutflow 2017 signal mMed-700_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                            28375   1.0000   1.0000
+  isGood j0,j1                    28375   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1890   0.0666   0.0666
+
+--- 2017 signal mMed-700_mDark-20_rinv-0.5 ---
+  N_pass (counts)     1839
+  W_pass (MC weight)  1235.67
+  N_phys              1236
+Cutflow 2017 signal mMed-700_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                            21766   1.0000   1.0000
+  isGood j0,j1                    21766   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1839   0.0845   0.0845
+
+--- 2017 signal mMed-700_mDark-20_rinv-0.7 ---
+  N_pass (counts)     1300
+  W_pass (MC weight)  870.994
+  N_phys              871
+Cutflow 2017 signal mMed-700_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            11283   1.0000   1.0000
+  isGood j0,j1                    11283   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1300   0.1152   0.1152
+
+--- 2017 signal mMed-800_mDark-20_rinv-0.3 ---
+  N_pass (counts)     3276
+  W_pass (MC weight)  1483.21
+  N_phys              1483
+Cutflow 2017 signal mMed-800_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                            64628   1.0000   1.0000
+  isGood j0,j1                    64628   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        3276   0.0507   0.0507
+
+--- 2017 signal mMed-800_mDark-20_rinv-0.5 ---
+  N_pass (counts)     2809
+  W_pass (MC weight)  1270.35
+  N_phys              1270
+Cutflow 2017 signal mMed-800_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                            43798   1.0000   1.0000
+  isGood j0,j1                    43798   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        2809   0.0641   0.0641
+
+--- 2017 signal mMed-800_mDark-20_rinv-0.7 ---
+  N_pass (counts)     1741
+  W_pass (MC weight)  787.98
+  N_phys              788
+Cutflow 2017 signal mMed-800_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            19403   1.0000   1.0000
+  isGood j0,j1                    19403   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1741   0.0897   0.0897
+
+--- 2017 signal mMed-900_mDark-20_rinv-0.3 ---
+  N_pass (counts)     5650
+  W_pass (MC weight)  1721.31
+  N_phys              1721
+Cutflow 2017 signal mMed-900_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           112053   1.0000   1.0000
+  isGood j0,j1                   112053   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        5650   0.0504   0.0504
+
+--- 2017 signal mMed-900_mDark-20_rinv-0.5 ---
+  N_pass (counts)     4711
+  W_pass (MC weight)  1434.4
+  N_phys              1434
+Cutflow 2017 signal mMed-900_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                            73727   1.0000   1.0000
+  isGood j0,j1                    73727   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        4711   0.0639   0.0639
+
+--- 2017 signal mMed-900_mDark-20_rinv-0.7 ---
+  N_pass (counts)     2649
+  W_pass (MC weight)  807.713
+  N_phys              807.7
+Cutflow 2017 signal mMed-900_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            30441   1.0000   1.0000
+  isGood j0,j1                    30441   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        2649   0.0870   0.0870
+
+=== 2017 signal contamination (final GAE selection) ===
+signal point                           N_pass     N_phys  unwt/data  phys/data   phys/QCD
+s-channel_mMed-1000_mDark-20_rinv-0.3     9595       1969     0.623%     0.128%     0.224%
+s-channel_mMed-1000_mDark-20_rinv-0.5     7405       1521     0.481%     0.099%     0.173%
+s-channel_mMed-1000_mDark-20_rinv-0.7     3650      748.7     0.237%     0.049%     0.085%
+s-channel_mMed-1100_mDark-20_rinv-0.3    14623       2015     0.949%     0.131%     0.229%
+s-channel_mMed-1100_mDark-20_rinv-0.5    10909       1505     0.708%     0.098%     0.171%
+s-channel_mMed-1100_mDark-20_rinv-0.7     5089      701.9     0.330%     0.046%     0.080%
+s-channel_mMed-1200_mDark-20_rinv-0.3    20734       1975     1.346%     0.128%     0.224%
+s-channel_mMed-1200_mDark-20_rinv-0.5    15237       1453     0.989%     0.094%     0.165%
+s-channel_mMed-1200_mDark-20_rinv-0.7     6875      655.6     0.446%     0.043%     0.075%
+s-channel_mMed-1300_mDark-20_rinv-0.3    27240       1830     1.768%     0.119%     0.208%
+s-channel_mMed-1300_mDark-20_rinv-0.5    20540       1381     1.333%     0.090%     0.157%
+s-channel_mMed-1300_mDark-20_rinv-0.7     8929      600.7     0.579%     0.039%     0.068%
+s-channel_mMed-1400_mDark-20_rinv-0.3    34323       1656     2.227%     0.107%     0.188%
+s-channel_mMed-1400_mDark-20_rinv-0.5    26076       1258     1.692%     0.082%     0.143%
+s-channel_mMed-1400_mDark-20_rinv-0.7    11320      545.1     0.735%     0.035%     0.062%
+s-channel_mMed-1500_mDark-20_rinv-0.3    41165       1445     2.671%     0.094%     0.164%
+s-channel_mMed-1500_mDark-20_rinv-0.5    31830       1120     2.066%     0.073%     0.127%
+s-channel_mMed-1500_mDark-20_rinv-0.7    13783      484.8     0.894%     0.031%     0.055%
+s-channel_mMed-500_mDark-20_rinv-0.3      663      977.3     0.043%     0.063%     0.111%
+s-channel_mMed-500_mDark-20_rinv-0.7      617        915     0.040%     0.059%     0.104%
+s-channel_mMed-600_mDark-20_rinv-0.3     1139       1134     0.074%     0.074%     0.129%
+s-channel_mMed-600_mDark-20_rinv-0.5     1247       1246     0.081%     0.081%     0.142%
+s-channel_mMed-600_mDark-20_rinv-0.7      861      857.1     0.056%     0.056%     0.097%
+s-channel_mMed-700_mDark-20_rinv-0.3     1890       1267     0.123%     0.082%     0.144%
+s-channel_mMed-700_mDark-20_rinv-0.5     1839       1236     0.119%     0.080%     0.140%
+s-channel_mMed-700_mDark-20_rinv-0.7     1300        871     0.084%     0.057%     0.099%
+s-channel_mMed-800_mDark-20_rinv-0.3     3276       1483     0.213%     0.096%     0.169%
+s-channel_mMed-800_mDark-20_rinv-0.5     2809       1270     0.182%     0.082%     0.144%
+s-channel_mMed-800_mDark-20_rinv-0.7     1741        788     0.113%     0.051%     0.090%
+s-channel_mMed-900_mDark-20_rinv-0.3     5650       1721     0.367%     0.112%     0.196%
+s-channel_mMed-900_mDark-20_rinv-0.5     4711       1434     0.306%     0.093%     0.163%
+s-channel_mMed-900_mDark-20_rinv-0.7     2649      807.7     0.172%     0.052%     0.092%

@@ -1,6 +1,7 @@
 import collections
 import concurrent.futures
 import multiprocessing
+import os
 import pickle
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from utils.GraphBuilder import (
     build_pfnano_jet_graph,
     pfnano_branches,
 )
+from utils.InputJson import normalize_input_path
 
 
 _SCORER_WORKER_CONFIG = None
@@ -301,7 +303,8 @@ class RootGraphScorer:
 
     def iter_file(self, file_name) -> Iterator[ScoreChunk]:
         """Yield ordered score chunks for *file_name*."""
-        file_name = str(Path(file_name))
+        # pathlib.Path turns root:// into root:/ and breaks xrootd access.
+        file_name = normalize_input_path(file_name)
         branches = tuple(pfnano_branches(self.graph_config))
         with uproot.open(f"{file_name}:Events") as tree:
             entry_stop = tree.num_entries
@@ -315,7 +318,7 @@ class RootGraphScorer:
         )
         progress = tqdm(
             total=entry_stop,
-            desc=f"Scoring {Path(file_name).name}",
+            desc=f"Scoring {os.path.basename(file_name)}",
             disable=not self.verbose,
         )
         try:

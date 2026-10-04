@@ -4,11 +4,13 @@
 Graph production and scoring are split into one job per shard of a sample's
 file list. Training is a single job, optionally on a GPU.
 
-    python condor/submit_condor.py --stage produce --samples background_example \
+    python condor/submit_condor.py --stage produce --samples background_2018 \
         --files-per-job 5
-    python condor/submit_condor.py --stage score --samples signal_example \
+    python condor/submit_condor.py --stage score --samples signal_2018 \
         --files-per-job 5 --job-arguments "--checkpoint training/run/checkpoint.pt"
     python condor/submit_condor.py --stage train --request-gpus 1
+    python condor/submit_condor.py --stage contamination --years 2018 \
+        --files-per-job 10
 
 Nothing is submitted automatically. Inspect the generated .jdl and run
 condor_submit on it.
@@ -23,8 +25,9 @@ SVJ_GNN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONDOR_DIR = os.path.join(SVJ_GNN_DIR, "condor")
 sys.path.insert(0, SVJ_GNN_DIR)
 
-from utils.FileLists import resolve_file_list, shard_file_list  # noqa: E402
+from signal_contamination import contamination_buckets  # noqa: E402
 from utils.GaeConfig import load_config  # noqa: E402
+from utils.InputJson import shard_files  # noqa: E402
 
 
 # Directories and files that must not go into the job tarball.
@@ -45,7 +48,15 @@ TAR_EXCLUDES = (
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--stage", required=True, choices=("produce", "score", "train")
+        "--stage",
+        required=True,
+        choices=("produce", "score", "train", "contamination"),
+    )
+    parser.add_argument(
+        "--years",
+        nargs="+",
+        default=["2018"],
+        help="Years for the contamination stage",
     )
     parser.add_argument("--config", default="gae_config.json")
     parser.add_argument("--samples", nargs="+", default=None)
@@ -96,32 +107,47 @@ def make_tarball(path):
     return path
 
 
-def queue_items(args, config):
-    """One ``stage, shard`` line per job."""
-    if args.stage == "train":
-        return [f"{args.stage}, 0"]
-
-    names = args.samples if args.samples else sorted(config.samples)
+def contamination_queue_items(args):
     items = []
-    for name in names:
-        sample = config.sample(name)
-        n_shards = len(
-            shard_file_list(
-                resolve_file_list(sample.file_list), args.files_per_job
+    for year in args.years:
+        for sample_label, _bucket, paths in contamination_buckets(
+            SVJ_GNN_DIR, year
+        ):
+            n_shards = len(shard_files(paths, args.files_per_job))
+            print(f"Contamination '{sample_label}': {n_shards} shard(s)")
+            items.extend(
+                f"contamination, {sample_label}, {shard}"
+                for shard in range(n_shards)
             )
+    return items
+
+
+def queue_items(args, config):
+    """One ``stage, sample, shard`` line per job."""
+    if args.stage == "train":
+        return [f"{args.stage}, train, 0"]
+    if args.stage == "contamination":
+        return contamination_queue_items(args)
+
+    items = []
+    for sample in config.select(args.samples):
+        n_shards = len(shard_files(sample.files(), args.files_per_job))
+        print(f"Sample '{sample.name}': {n_shards} shard(s)")
+        items.extend(
+            f"{args.stage}, {sample.name}, {shard}" for shard in range(n_shards)
         )
-        print(f"Sample '{name}': {n_shards} shard(s)")
-        items.extend(f"{args.stage}, {shard}" for shard in range(n_shards))
     return items
 
 
 def job_arguments(args):
-    """Arguments appended after the stage and shard."""
-    pieces = [f"--config {args.config}"]
-    if args.stage != "train":
+    """Arguments appended after the stage, sample and shard."""
+    if args.stage == "contamination":
+        pieces = [f"--files-per-job {args.files_per_job}"]
+    elif args.stage == "train":
+        pieces = [f"--config {args.config}"]
+    else:
+        pieces = [f"--config {args.config}"]
         pieces.append(f"--files-per-job {args.files_per_job}")
-    if args.samples:
-        pieces.append("--samples " + " ".join(args.samples))
     if args.job_arguments:
         pieces.append(args.job_arguments)
     return " ".join(pieces)
@@ -129,7 +155,10 @@ def job_arguments(args):
 
 def main():
     args = parse_arguments()
-    config = load_config(os.path.join(SVJ_GNN_DIR, args.config))
+    if args.stage != "contamination":
+        config = load_config(os.path.join(SVJ_GNN_DIR, args.config))
+    else:
+        config = None
 
     os.makedirs(args.submit_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)

@@ -6,88 +6,253 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+import awkward as ak
 import numpy as np
 
 from architectures.ModelRegistry import build_model, training_loss, validate_model
-from utils.Cuts import cuts_fingerprint, event_cut_mask, jet_cut_mask
-from utils.FileLists import (
-    read_file_list,
-    resolve_file_list,
-    shard_file_list,
-    write_file_list,
+from utils.Cuts import (
+    HEM_FIRST_RUN,
+    POST_HEM_FRACTION,
+    add_cutflow,
+    cut_branches,
+    cutflow,
+    cuts_fingerprint,
+    event_cut_mask,
+    format_cutflow,
+    jet_cut_mask,
+    post_hem_mask,
 )
 from utils.GaeConfig import load_config
 from utils.GraphBuilder import GraphBuildConfig
+from utils.InputJson import (
+    dataset_groups,
+    dataset_of,
+    flat_files,
+    load_input_json,
+    normalize_input_path,
+    resolve_file_selection,
+    score_output_basename,
+    shard_files,
+    write_input_json,
+)
 from utils.MetricUtils import auc, efficiency_curve, max_sic, roc_curve, sic
 
 
-class TestFileLists(unittest.TestCase):
-    def test_comments_and_blank_lines_are_ignored(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "files.txt")
-            with open(path, "w") as list_file:
-                list_file.write(
-                    "# a comment\n"
-                    "\n"
-                    "/abs/path/a.root\n"
-                    "   \n"
-                    "root://cmseos.fnal.gov//store/b.root\n"
-                )
-            self.assertEqual(
-                read_file_list(path),
-                [
-                    "/abs/path/a.root",
-                    "root://cmseos.fnal.gov//store/b.root",
-                ],
-            )
+class TestInputJson(unittest.TestCase):
+    def setUp(self):
+        self.datasets = {
+            "QCD_HT500to700": ["root://host//store/b.root", "root://host//store/a.root"],
+            "QCD_HT300to500": ["root://host//store/c.root"],
+        }
 
-    def test_empty_list_is_rejected(self):
+    def test_round_trip_sorts_datasets_and_files(self):
         with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "empty.txt")
-            with open(path, "w") as list_file:
-                list_file.write("# nothing here\n")
+            path = os.path.join(directory, "nested", "2018_background.json")
+            write_input_json(path, 2018, "background", "root://host//base/", self.datasets)
+            spec = load_input_json(path)
+        self.assertEqual(spec["year"], "2018")
+        self.assertEqual(spec["type"], "background")
+        self.assertEqual(list(spec["datasets"]), ["QCD_HT300to500", "QCD_HT500to700"])
+        self.assertEqual(
+            spec["datasets"]["QCD_HT500to700"],
+            ["root://host//store/a.root", "root://host//store/b.root"],
+        )
+
+    def test_empty_json_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "empty.json")
+            with open(path, "w") as json_file:
+                json.dump({"datasets": {"x": []}}, json_file)
             with self.assertRaises(ValueError):
-                read_file_list(path)
+                load_input_json(path)
 
-    def test_relative_paths_resolve_against_the_list(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "files.txt")
-            with open(path, "w") as list_file:
-                list_file.write(
-                    "sub/a.root\n"
-                    "/abs/b.root\n"
-                    "root://host//store/c.root\n"
-                )
-            resolved = resolve_file_list(path)
-            self.assertEqual(
-                resolved[0], os.path.join(directory, "sub", "a.root")
-            )
-            self.assertEqual(resolved[1], "/abs/b.root")
-            self.assertEqual(resolved[2], "root://host//store/c.root")
+    def test_groups_can_be_restricted_to_named_datasets(self):
+        spec = {"datasets": self.datasets}
+        groups = dataset_groups(spec, ["QCD_HT300to500"])
+        self.assertEqual(list(groups), ["QCD_HT300to500"])
+        with self.assertRaises(KeyError):
+            dataset_groups(spec, ["TTJets"])
+
+    def test_flat_files_and_dataset_lookup_are_consistent(self):
+        files = flat_files(self.datasets)
+        self.assertEqual(len(files), 3)
+        self.assertEqual(files[0], "root://host//store/c.root")
+        for file_path in files:
+            self.assertIn(file_path, self.datasets[dataset_of(file_path, self.datasets)])
+        with self.assertRaises(KeyError):
+            dataset_of("nope.root", self.datasets)
 
     def test_sharding_covers_every_file_once(self):
         paths = [f"file_{index}.root" for index in range(7)]
-        shards = shard_file_list(paths, 3)
+        shards = shard_files(paths, 3)
         self.assertEqual([len(shard) for shard in shards], [3, 3, 1])
         self.assertEqual([path for shard in shards for path in shard], paths)
 
-    def test_round_trip_through_write_file_list(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path = os.path.join(directory, "nested", "files.txt")
-            paths = ["/abs/a.root", "root://host//store/b.root"]
-            write_file_list(paths, path)
-            self.assertEqual(read_file_list(path), paths)
+    def test_normalize_input_path_repairs_normpath_damage_to_xrootd(self):
+        url = (
+            "root://cmsdcache-kit-disk.gridka.de:1094//store/user/foo/"
+            "part-0.root"
+        )
+        broken = os.path.normpath(url)
+        self.assertTrue(broken.startswith("root:/"))
+        self.assertEqual(
+            normalize_input_path(broken),
+            "root://cmsdcache-kit-disk.gridka.de:1094/store/user/foo/part-0.root",
+        )
+
+    def test_score_output_basename_uses_role_and_part_index(self):
+        remote = (
+            "root://host//store/part-7.root"
+        )
+        self.assertEqual(
+            score_output_basename("data", remote), "data_part-7.root"
+        )
+        self.assertEqual(
+            score_output_basename("background", remote), "qcd_part-7.root"
+        )
+        self.assertEqual(
+            score_output_basename(
+                "signal",
+                remote,
+                sample_name="signal_2018_s-channel_mMed-1000_mDark-20_rinv-0.3",
+            ),
+            "signal_mMed-1000_mDark-20_rinv-0.3_part-7.root",
+        )
+
+    def test_resolve_file_selection_normalizes_xrootd_paths(self):
+        paths = [
+            "root://host/store/a.root",
+            "root://host/store/b.root",
+        ]
+        selected = resolve_file_selection(
+            paths, [os.path.normpath(paths[0])]
+        )
+        self.assertEqual(selected, [paths[0]])
+
+
+def fake_events(**overrides):
+    """Five events exercising each selection; defaults all pass as MC 2017."""
+    columns = {
+        "run": [1, 1, 1, 1, 1],
+        "lumSec": [1, 2, 3, 4, 5],
+        "event": [10, 20, 30, 40, 50],
+        "nFatJet": [2, 2, 2, 2, 2],
+        "DeltaEtaJ0J1FatJet": [1.8, -1.9, 2.0, 1.6, 2.1],
+        "FatJet_isGood": [[True, True]] * 5,
+        "FatJet_pt": [[500.0, 300.0]] * 5,
+        "FatJet_photonEnergyFraction": [[0.1, 0.1]] * 5,
+        "HEMVeto": [True] * 5,
+    }
+    columns.update(overrides)
+    return ak.Array(columns)
 
 
 class TestCuts(unittest.TestCase):
-    def test_event_cut_mask_is_a_pass_through_placeholder(self):
-        events = np.zeros(5)
-        mask = event_cut_mask(events)
+    def test_cut_branches_only_need_hem_veto_for_2018_mc(self):
+        self.assertIn("HEMVeto", cut_branches("background", "2018"))
+        self.assertIn("HEMVeto", cut_branches("signal", 2018))
+        self.assertNotIn("HEMVeto", cut_branches("data", "2018"))
+        self.assertNotIn("HEMVeto", cut_branches("background", "2017"))
+
+    def test_everything_passes_by_default(self):
+        mask = event_cut_mask(fake_events(), "background", "2017")
         self.assertEqual(mask.shape, (5,))
         self.assertEqual(mask.dtype, bool)
         self.assertTrue(mask.all())
 
-    def test_jet_cut_mask_is_a_pass_through_placeholder(self):
+    def test_leading_two_jets_must_be_good(self):
+        events = fake_events(
+            FatJet_isGood=[
+                [True, True],
+                [False, True],
+                [True, False],
+                [True, True, False],
+                [True],
+            ],
+            nFatJet=[2, 2, 2, 3, 1],
+        )
+        mask = event_cut_mask(events, "signal", "2017")
+        self.assertEqual(mask.tolist(), [True, False, False, True, False])
+
+    def test_delta_eta_control_region_applies_to_every_role(self):
+        events = fake_events(
+            run=[300000] * 5,
+            DeltaEtaJ0J1FatJet=[1.4, 1.5, 1.8, -2.1, 2.3],
+        )
+        expected = [False, False, True, True, False]
+        for role in ("data", "background", "signal"):
+            self.assertEqual(
+                event_cut_mask(events, role, "2017").tolist(), expected, role
+            )
+
+    def test_cutflow_counts_are_cumulative_and_match_the_mask(self):
+        events = fake_events(
+            FatJet_isGood=[[True, True], [False, True]] + [[True, True]] * 3,
+            DeltaEtaJ0J1FatJet=[1.8, 1.8, 2.5, 1.8, 1.8],
+        )
+        counts = cutflow(events, "background", "2017")
+        self.assertEqual(list(counts.values()), [5, 4, 3])
+        self.assertEqual(
+            list(counts.values())[-1],
+            int(event_cut_mask(events, "background", "2017").sum()),
+        )
+        self.assertEqual(len(cutflow(events, "data", "2018")), 4)
+        self.assertEqual(len(cutflow(events, "signal", "2018")), 5)
+        total = add_cutflow({}, counts)
+        total = add_cutflow(total, counts)
+        self.assertEqual(list(total.values()), [10, 8, 6])
+        table = format_cutflow("x", total)
+        self.assertIn("skim", table)
+        self.assertIn("0.6000", table)
+
+    def test_gap_jet_veto_applies_to_post_hem_data_runs(self):
+        events = fake_events(
+            run=[HEM_FIRST_RUN - 1, HEM_FIRST_RUN, HEM_FIRST_RUN + 5, 320000, 320000],
+            FatJet_photonEnergyFraction=[[0.7, 0.1]] * 4 + [[0.1, 0.7]],
+            FatJet_pt=[[500.0, 300.0]] * 3 + [[350.0, 300.0], [500.0, 300.0]],
+        )
+        mask = event_cut_mask(events, "data", "2018")
+        # pre-HEM run passes; post-HEM with pt > 400 and fraction > 0.6 fail;
+        # low pt or low leading fraction pass.
+        self.assertEqual(mask.tolist(), [True, False, False, True, True])
+        # Not a 2018 sample: nothing vetoed by the gap jet criterion.
+        self.assertTrue(event_cut_mask(events, "data", "2017").all())
+
+    def test_mc_2018_split_is_deterministic_and_close_to_the_fraction(self):
+        n = 20000
+        events = ak.Array(
+            {
+                "run": np.ones(n, dtype=np.int64),
+                "lumSec": np.arange(n) // 100,
+                "event": np.arange(n),
+            }
+        )
+        first = post_hem_mask(events, "background", "2018")
+        second = post_hem_mask(events, "background", "2018")
+        np.testing.assert_array_equal(first, second)
+        self.assertAlmostEqual(first.mean(), POST_HEM_FRACTION, delta=0.02)
+        self.assertFalse(post_hem_mask(events, "background", "2017").any())
+
+    def test_hem_veto_branch_only_matters_for_the_post_hem_mc_fraction(self):
+        n = 2000
+        base = {
+            "run": np.ones(n, dtype=np.int64),
+            "lumSec": np.ones(n, dtype=np.int64),
+            "event": np.arange(n),
+            "nFatJet": np.full(n, 2),
+            "DeltaEtaJ0J1FatJet": np.full(n, 1.8),
+            "FatJet_isGood": [[True, True]] * n,
+            "FatJet_pt": [[500.0, 300.0]] * n,
+            "FatJet_photonEnergyFraction": [[0.1, 0.1]] * n,
+        }
+        vetoed = ak.Array({**base, "HEMVeto": np.zeros(n, dtype=bool)})
+        passing = ak.Array({**base, "HEMVeto": np.ones(n, dtype=bool)})
+        post_hem = post_hem_mask(vetoed, "background", "2018")
+        mask = event_cut_mask(vetoed, "background", "2018")
+        np.testing.assert_array_equal(mask, ~post_hem)
+        self.assertTrue(event_cut_mask(passing, "background", "2018").all())
+
+    def test_jet_cut_mask_is_a_pass_through(self):
         config = GraphBuildConfig()
         self.assertTrue(jet_cut_mask(None, 0, config))
 
@@ -191,6 +356,34 @@ class TestConfig(unittest.TestCase):
         self.assertIn("smoke", config.samples)
         roles = {sample.role for sample in config.samples.values()}
         self.assertEqual(roles, {"signal", "background", "data"})
+        for sample in config.samples.values():
+            self.assertIn(sample.year, ("2017", "2018"))
+            self.assertTrue(sample.input_json_path.endswith(".json"))
+        smoke = config.sample("smoke")
+        self.assertEqual(smoke.year, "2018")
+        self.assertEqual(list(smoke.groups()), ["Run2018A_part14"])
+
+    def test_per_dataset_signal_is_expanded_into_one_sample_per_point(self):
+        config = load_config(
+            os.path.join(self.repository, "gae_config.json")
+        )
+        self.assertNotIn("signal_2018", config.samples)
+        points = config.select(["signal_2018"])
+        self.assertGreater(len(points), 20)
+        for point in points:
+            self.assertEqual(point.group, "signal_2018")
+            self.assertEqual(point.role, "signal")
+            self.assertEqual(len(point.datasets), 1)
+            self.assertTrue(point.name.startswith("signal_2018_s-channel"))
+            self.assertEqual(list(point.groups()), point.datasets)
+        # Exact names and groups mix, and unknown names fail.
+        selected = config.select(["smoke", "signal_2018"])
+        self.assertEqual(selected[0].name, "smoke")
+        self.assertEqual(len(selected), 1 + len(points))
+        with self.assertRaises(KeyError):
+            config.select(["nope"])
+        # QCD-only background sample keeps just the six HT bins.
+        self.assertEqual(len(config.sample("qcd_2018").groups()), 6)
 
     def test_graph_build_config_drops_producer_only_settings(self):
         config = load_config(
@@ -209,7 +402,11 @@ class TestConfig(unittest.TestCase):
                 json.dump(
                     {
                         "samples": {
-                            "x": {"role": "sideband", "file_list": "x.txt"}
+                            "x": {
+                                "role": "sideband",
+                                "year": "2018",
+                                "input_json": "x.json",
+                            }
                         }
                     },
                     config_file,
@@ -226,7 +423,7 @@ class TestConfig(unittest.TestCase):
 
 
 class TestFileListGraphProducer(unittest.TestCase):
-    def test_raw_file_names_come_from_the_file_list(self):
+    def test_raw_file_names_come_from_the_given_paths(self):
         from utils.JetGraphProducer import FileListGraphProducer
 
         paths = ["/abs/a.root", "root://host//store/b.root"]
@@ -234,18 +431,26 @@ class TestFileListGraphProducer(unittest.TestCase):
         producer._file_paths = list(paths)
         self.assertEqual(producer.raw_file_names, paths)
 
-    def test_requires_exactly_one_input_source(self):
+    def test_initial_events_are_summed_per_dataset_and_cached(self):
+        from utils.JetGraphProducer import FileListGraphProducer
+
+        groups = {"A": ["a0.root", "a1.root"], "B": ["b0.root"]}
+        producer = FileListGraphProducer.__new__(FileListGraphProducer)
+        producer.dataset_groups = groups
+        producer.verbose = False
+        producer._initial_events_cache = {"A": 7, "B": 3}
+        producer._current_file = "a1.root"
+        self.assertEqual(producer.get_total_initial_events(), 7)
+        producer._current_file = "b0.root"
+        self.assertEqual(producer.get_total_initial_events(), 3)
+
+    def test_requires_input_files(self):
         from utils.JetGraphProducer import FileListGraphProducer
 
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(ValueError):
-                FileListGraphProducer(directory, "dataset")
-            with self.assertRaises(ValueError):
                 FileListGraphProducer(
-                    directory,
-                    "dataset",
-                    file_list="a.txt",
-                    file_paths=["b.root"],
+                    directory, "dataset", file_paths=[], role="data", year="2018"
                 )
 
 

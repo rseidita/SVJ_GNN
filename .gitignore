@@ -163,6 +163,7 @@ cython_debug/
 .venv-gae/
 data/
 scores/
+output_scores/
 plots/
 training/
 condor/logs/

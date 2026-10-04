@@ -24,20 +24,17 @@ from CRABClient.UserUtilities import config
 SVJ_GNN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, SVJ_GNN_DIR)
 
-from utils.FileLists import read_file_list  # noqa: E402
 from utils.GaeConfig import load_config  # noqa: E402
 
 
 # Which sample and stage this submission processes.
-GAE_SAMPLE = "background_example"
+GAE_SAMPLE = "background_2018"
 GAE_STAGE = "score"
 GAE_ARGUMENTS = "--checkpoint checkpoint.pt"
 
 pipeline = load_config(os.path.join(SVJ_GNN_DIR, "gae_config.json"))
 sample = pipeline.sample(GAE_SAMPLE)
-input_files = read_file_list(
-    os.path.join(SVJ_GNN_DIR, sample.file_list)
-)
+input_files = sample.files()
 
 config = config()
 

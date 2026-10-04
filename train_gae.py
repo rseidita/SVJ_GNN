@@ -7,8 +7,10 @@ architectures/ needs no change here.
     python train_gae.py --epochs 20
     python train_gae.py --train-on smoke --epochs 1 --no-comet
 
-By default the autoencoder is trained on every sample with role
-"background". Use --train-on to train on named samples instead.
+By default the autoencoder is trained on every sample with role "data"
+(the control region). Background and signal are for inference and
+discrimination plots only; use score_gae.py and plot_gae.py for those.
+Use --train-on to restrict which data samples are used.
 """
 
 # comet_ml must be imported before torch for its automatic logging to work.
@@ -41,7 +43,7 @@ def parse_arguments():
         "--train-on",
         nargs="+",
         default=None,
-        help="Sample names to train on; defaults to every background sample",
+        help="Data sample names to train on; defaults to every data sample",
     )
     parser.add_argument("--output-dir", default="training")
     parser.add_argument("--run-name", default=None)
@@ -81,13 +83,21 @@ def training_settings(config, args):
 
 def resolve_training_samples(config, args):
     if args.train_on:
-        samples = [config.sample(name) for name in args.train_on]
+        samples = config.select(args.train_on)
     else:
-        samples = config.samples_with_role("background")
+        samples = config.samples_with_role("data")
         if not samples:
             raise ValueError(
-                "No sample has role 'background'; use --train-on to choose "
-                "which samples to train on"
+                "No sample has role 'data'; use --train-on to choose which "
+                "data sample to train on"
+            )
+    for sample in samples:
+        if sample.role != "data":
+            raise ValueError(
+                f"Cannot train on {sample.name!r} (role={sample.role!r}). "
+                "The autoencoder is trained only on data in the control "
+                "region. Score background and signal with score_gae.py for "
+                "discrimination plots."
             )
     return samples
 

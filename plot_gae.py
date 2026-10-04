@@ -6,13 +6,15 @@ history written by train_gae.py.
 
     python plot_gae.py --history training/GraphAE_graphAE/history.json
     python plot_gae.py --checkpoint training/GraphAE_graphAE/checkpoint.pt \
-        --residual-sample background_example
+        --residual-sample background_2018
 
-Signal and background are pooled by role, so the ROC and SIC plots use every
-sample with role "signal" against every sample with role "background".
+Background samples are pooled; every signal sample is kept separate, so the
+ROC and SIC plots show one curve per signal point against the pooled
+background.
 """
 
 import argparse
+import glob
 import json
 import os
 
@@ -20,6 +22,7 @@ import numpy as np
 import uproot
 
 from utils.GaeConfig import load_config
+from utils.InputJson import score_output_basename
 from utils.PlotUtils import (
     plot_feature_residuals,
     plot_latent_distributions,
@@ -35,7 +38,20 @@ from utils.PlotUtils import (
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="gae_config.json")
-    parser.add_argument("--scores-dir", default="scores")
+    parser.add_argument(
+        "--scores-dir",
+        default="output_scores",
+        help="Directory of score ROOT files from score_gae.py",
+    )
+    parser.add_argument(
+        "--samples",
+        nargs="+",
+        default=None,
+        help=(
+            "Config sample names to plot; default combines score files in "
+            "--scores-dir into data, qcd, and one series per signal point"
+        ),
+    )
     parser.add_argument("--history", default=None)
     parser.add_argument("--outdir", default="plots")
     parser.add_argument(
@@ -65,29 +81,144 @@ def read_scores(path):
     return arrays["score"], arrays["weight"]
 
 
-def load_samples(config, scores_dir):
-    """Per-sample scores and weights, plus the pooled scores per role."""
-    samples = {}
-    for name, sample in config.samples.items():
-        path = os.path.join(scores_dir, f"{name}.root")
-        if not os.path.exists(path):
-            continue
-        samples[name] = (sample.role, *read_scores(path))
+def signal_label(sample):
+    """Short legend label: the dataset name for per-dataset signal samples."""
+    if sample.datasets and len(sample.datasets) == 1:
+        return sample.datasets[0].replace("s-channel_", "")
+    return sample.name
 
+
+def score_glob_for_sample(sample):
+    """Glob pattern for per-file outputs under ``output_scores/``."""
+    if sample.role == "data":
+        return "data_part-*.root"
+    if sample.role == "background":
+        return "qcd_part-*.root"
+    if sample.role == "signal" and sample.datasets and len(sample.datasets) == 1:
+        basename = score_output_basename(
+            sample.role,
+            "part-0.root",
+            sample_name=sample.name,
+            dataset=sample.datasets[0],
+        )
+        return basename.replace("part-0.root", "part-*.root")
+    return f"{sample.name}.root"
+
+
+def score_paths_for_sample(scores_dir, sample):
+    legacy = os.path.join(scores_dir, f"{sample.name}.root")
+    if os.path.exists(legacy):
+        return [legacy]
+    pattern = os.path.join(scores_dir, score_glob_for_sample(sample))
+    return sorted(glob.glob(pattern))
+
+
+def overlay_group_key(stem):
+    """Key for combining ``*_part-N.root`` files into one plot series."""
+    if stem.startswith("data_part-"):
+        return "data"
+    if stem.startswith("qcd_part-"):
+        return "qcd"
+    if stem.startswith("signal_") and "_part-" in stem:
+        return stem.rsplit("_part-", 1)[0]
+    return stem
+
+
+def role_for_overlay_key(key):
+    if key == "data":
+        return "data"
+    if key == "qcd":
+        return "background"
+    if key.startswith("signal_"):
+        return "signal"
+    return None
+
+
+def combined_overlays(scores_dir):
+    """Merge part files into data, qcd, and one entry per signal point."""
+    buckets = {}
+    for path in sorted(glob.glob(os.path.join(scores_dir, "*.root"))):
+        stem = os.path.splitext(os.path.basename(path))[0]
+        buckets.setdefault(overlay_group_key(stem), []).append(path)
+
+    overlays = {}
+    roles = {}
+    for key, paths in sorted(buckets.items()):
+        scores_parts = []
+        weights_parts = []
+        for path in paths:
+            score, weight = read_scores(path)
+            scores_parts.append(score)
+            weights_parts.append(weight)
+        overlays[key] = (
+            np.concatenate(scores_parts),
+            np.concatenate(weights_parts),
+        )
+        role = role_for_overlay_key(key)
+        if role is not None:
+            roles[key] = role
+    return overlays, roles
+
+
+def load_samples_from_config(config, scores_dir, sample_names):
+    """Load only the named config samples (each may match several part files)."""
+    samples = {}
+    for sample in config.select(sample_names):
+        paths = score_paths_for_sample(scores_dir, sample)
+        if not paths:
+            continue
+        scores_parts = []
+        weights_parts = []
+        for path in paths:
+            score, weight = read_scores(path)
+            scores_parts.append(score)
+            weights_parts.append(weight)
+        samples[sample.name] = (
+            sample.role,
+            np.concatenate(scores_parts),
+            np.concatenate(weights_parts),
+        )
+    return samples
+
+
+def pool_by_role(samples):
     pooled = {}
     for role in ("signal", "background", "data"):
-        scores = [
-            values[1] for values in samples.values() if values[0] == role
-        ]
-        weights = [
-            values[2] for values in samples.values() if values[0] == role
-        ]
+        scores = [values[1] for values in samples.values() if values[0] == role]
+        weights = [values[2] for values in samples.values() if values[0] == role]
         if scores:
-            pooled[role] = (
-                np.concatenate(scores),
-                np.concatenate(weights),
-            )
-    return samples, pooled
+            pooled[role] = (np.concatenate(scores), np.concatenate(weights))
+    return pooled
+
+
+def pool_discovered(overlays, roles):
+    pooled = {}
+    for role in ("signal", "background", "data"):
+        scores = []
+        weights = []
+        for stem, sample_role in roles.items():
+            if sample_role != role:
+                continue
+            part_scores, part_weights = overlays[stem]
+            scores.append(part_scores)
+            weights.append(part_weights)
+        if scores:
+            pooled[role] = (np.concatenate(scores), np.concatenate(weights))
+    return pooled
+
+
+def load_samples(config, scores_dir, sample_names=None):
+    """Overlays for plotting and pooled scores per role."""
+    if sample_names:
+        samples = load_samples_from_config(config, scores_dir, sample_names)
+        overlays = {
+            name: (scores, weights)
+            for name, (_, scores, weights) in samples.items()
+        }
+        return overlays, pool_by_role(samples)
+
+    overlays, roles = combined_overlays(scores_dir)
+    return overlays, pool_discovered(overlays, roles)
 
 
 def residual_plots(args, config, formats):
@@ -157,17 +288,15 @@ def main():
         )
         print("Wrote loss_curves")
 
-    samples, pooled = load_samples(config, args.scores_dir)
-    if not samples:
+    overlays, pooled = load_samples(
+        config, args.scores_dir, sample_names=args.samples
+    )
+    if not overlays:
         print(
             f"No score files found in '{args.scores_dir}'; run score_gae.py "
             "first to make the score based plots"
         )
     else:
-        overlays = {
-            name: (scores, weights)
-            for name, (_, scores, weights) in samples.items()
-        }
         histograms = plot_score_distributions(
             overlays,
             os.path.join(args.outdir, "score_distributions"),
@@ -185,22 +314,31 @@ def main():
         write_th1s(os.path.join(args.outdir, "histograms.root"), histograms)
         print("Wrote histograms.root")
 
-        if "signal" in pooled and "background" in pooled:
-            signal_scores, signal_weights = pooled["signal"]
+        if args.samples:
+            signals = {
+                signal_label(config.sample(name)): overlays[name]
+                for name in overlays
+                if config.sample(name).role == "signal"
+            }
+        else:
+            signals = {
+                key.replace("signal_", "", 1): overlays[key]
+                for key in overlays
+                if key.startswith("signal_")
+            }
+        if signals and "background" in pooled:
             background_scores, background_weights = pooled["background"]
             plot_roc(
-                signal_scores,
+                signals,
                 background_scores,
                 os.path.join(args.outdir, "roc"),
-                weights_signal=signal_weights,
                 weights_background=background_weights,
                 formats=formats,
             )
             plot_sic_vs_fpr(
-                signal_scores,
+                signals,
                 background_scores,
                 os.path.join(args.outdir, "sic_vs_fpr"),
-                weights_signal=signal_weights,
                 weights_background=background_weights,
                 formats=formats,
             )
