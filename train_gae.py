@@ -239,7 +239,15 @@ def main():
     default_run_name = config.model.spec.replace(".", "_")
     if active_seed is not None:
         default_run_name = f"{default_run_name}_seed{active_seed}"
-    run_name = args.run_name or default_run_name
+    if args.run_name:
+        if "{seed}" in args.run_name:
+            run_name = args.run_name.format(seed=active_seed)
+        elif active_seed is not None and not args.run_name.endswith(f"_seed{active_seed}"):
+            run_name = f"{args.run_name}_seed{active_seed}"
+        else:
+            run_name = args.run_name
+    else:
+        run_name = default_run_name
     output_dir = os.path.join(base_output_dir, run_name)
     os.makedirs(output_dir, exist_ok=True)
 

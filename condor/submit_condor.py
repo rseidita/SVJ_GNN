@@ -150,6 +150,11 @@ def parse_arguments():
         help="Explicitly disable Comet ML tracking for training jobs",
     )
     parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Custom run name for training output checkpoints and logs (train stage only)",
+    )
+    parser.add_argument(
         "--job-arguments",
         default="",
         help="Extra arguments appended to the stage's python command",
@@ -180,11 +185,12 @@ def make_tarball(path):
 def queue_items(args, config):
     """One ``stage, sample, shard`` line per job."""
     if args.stage == "train":
+        sample_tag = args.run_name or ("_".join(args.samples) if args.samples else "train")
         if args.seeds:
-            return [f"{args.stage}, train_seed{seed}, 0" for seed in args.seeds]
+            return [f"{args.stage}, {sample_tag}_seed{seed}, 0" for seed in args.seeds]
         if args.seed is not None:
-            return [f"{args.stage}, train_seed{args.seed}, 0"]
-        return [f"{args.stage}, train, 0"]
+            return [f"{args.stage}, {sample_tag}_seed{args.seed}, 0"]
+        return [f"{args.stage}, {sample_tag}, 0"]
 
     items = []
     for sample in config.select(args.samples):
@@ -204,6 +210,8 @@ def job_arguments(args):
             pieces.append(f"--train-on {' '.join(args.samples)}")
         if args.output_location == "eos" and args.eos_dir and "--data-dir" not in args.job_arguments:
             pieces.append(f"--data-dir {args.eos_dir}")
+        if args.run_name and "--run-name" not in args.job_arguments:
+            pieces.append(f"--run-name {args.run_name}")
         if args.comet and "--comet" not in args.job_arguments:
             pieces.append("--comet")
         if args.no_comet and "--no-comet" not in args.job_arguments:

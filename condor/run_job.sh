@@ -48,7 +48,7 @@ case ${STAGE} in
         python score_gae.py --samples "${SAMPLE}" --shard "${SHARD}" "$@"
         ;;
     train)
-        if [[ "${SAMPLE}" =~ ^train_seed([0-9]+)$ ]]; then
+        if [[ "${SAMPLE}" =~ _seed([0-9]+)$ ]] || [[ "${SAMPLE}" =~ ^train_seed([0-9]+)$ ]]; then
             python train_gae.py --seed "${BASH_REMATCH[1]}" "$@"
         else
             python train_gae.py "$@"
