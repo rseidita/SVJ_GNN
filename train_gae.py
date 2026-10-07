@@ -85,6 +85,8 @@ def parse_arguments():
         help="Frequency of saving checkpoint_latest.pt during training (default: 1)",
     )
     parser.add_argument("--device", default=None)
+    parser.add_argument("--amp", action="store_true", default=None, help="Enable Automatic Mixed Precision (AMP)")
+    parser.add_argument("--no-amp", action="store_true", default=None, help="Explicitly disable Automatic Mixed Precision")
     parser.add_argument(
         "--comet",
         action="store_true",
@@ -174,7 +176,7 @@ def start_experiment(config, settings, samples, args):
     return experiment
 
 
-def evaluate(model, loader, alpha, device, description, verbose):
+def evaluate(model, loader, alpha, device, description, verbose, use_amp=False):
     """Mean loss over *loader*.
 
     Evaluated with the model in eval mode, so the edge term uses observed
@@ -185,12 +187,10 @@ def evaluate(model, loader, alpha, device, description, verbose):
     n_batches = 0
     with torch.no_grad():
         for batch in tqdm(loader, desc=description, disable=not verbose, leave=False):
-            batch = batch.to(device)
-            total, edges, features = training_loss(model, batch, alpha)
-            totals += torch.tensor(
-                [total.item(), edges.item(), features.item()],
-                dtype=torch.float64,
-            )
+            batch = batch.to(device, non_blocking=True)
+            with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                total, edges, features = training_loss(model, batch, alpha)
+            totals += torch.tensor([total.item(), edges.item(), features.item()], dtype=torch.float64)
             n_batches += 1
     if not n_batches:
         return None
@@ -223,6 +223,9 @@ def main():
         else ("cuda" if torch.cuda.is_available() else "cpu")
     )
     print(f"Using device {device}")
+    use_amp = (device.type == "cuda") if args.amp is None and not args.no_amp else (bool(args.amp) and not args.no_amp)
+    print(f"Automatic Mixed Precision (AMP): {'enabled' if use_amp else 'disabled'}")
+    scaler = torch.amp.GradScaler("cuda", enabled=(use_amp and device.type == "cuda"))
 
     active_seed = settings.get("seed")
     if active_seed is not None:
@@ -362,6 +365,9 @@ def main():
             print("Loaded optimizer state_dict.")
         else:
             print("Notice: No optimizer_state_dict in checkpoint; initialized optimizer fresh.")
+        if "scaler_state_dict" in checkpoint_data and checkpoint_data["scaler_state_dict"] is not None and use_amp and device.type == "cuda":
+            scaler.load_state_dict(checkpoint_data["scaler_state_dict"])
+            print("Loaded scaler state_dict.")
         start_epoch = checkpoint_data.get("epoch", 0)
         best_val_loss = checkpoint_data.get("best_val_loss", float("inf"))
         if "history" in checkpoint_data and isinstance(checkpoint_data["history"], dict):
@@ -380,6 +386,7 @@ def main():
             "epoch": current_epoch,
             "state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "scaler_state_dict": scaler.state_dict() if (use_amp and device.type == "cuda") else None,
             "history": history,
             "best_val_loss": current_best_loss,
             "model_spec": config.model.spec,
@@ -421,14 +428,16 @@ def main():
                     leave=False,
                 )
             ):
-                batch = batch.to(device)
-                total, edges, features = training_loss(model, batch, alpha)
+                batch = batch.to(device, non_blocking=True)
+                with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                    total, edges, features = training_loss(model, batch, alpha)
 
-                (total / args.accumulate_grad_batches).backward()
+                scaler.scale(total / args.accumulate_grad_batches).backward()
                 if (batch_idx + 1) % args.accumulate_grad_batches == 0 or (
                     batch_idx + 1
                 ) == len(loader_training):
-                    optimizer.step()
+                    scaler.step(optimizer)
+                    scaler.update()
                     optimizer.zero_grad()
 
                 values = [total.item(), edges.item(), features.item()]
@@ -449,6 +458,7 @@ def main():
                 device,
                 f"Validation {epoch}",
                 verbose,
+                use_amp=use_amp,
             )
             history["epoch_train"].append(train_losses)
             history["epoch_validation"].append(validation_losses)
@@ -496,7 +506,7 @@ def main():
         print(f"--> Training completed in {time.time() - start:.2f} seconds")
 
     test_losses = evaluate(
-        model, loader_testing, alpha, device, "Test", verbose
+        model, loader_testing, alpha, device, "Test", verbose, use_amp=use_amp
     )
     if test_losses is not None:
         history["test"] = test_losses
