@@ -45,6 +45,7 @@ def parse_arguments():
         default=None,
         help="Data sample names to train on; defaults to every data sample",
     )
+    parser.add_argument("--data-dir", default=None, help="Directory containing processed dataset directories (defaults to EOS or local output_dir)")
     parser.add_argument("--output-dir", default=None, help="Directory for training checkpoints; defaults to training.output_dir in config")
     parser.add_argument("--seed", type=int, default=None, help="Random seed for model initialization and training RNG; defaults to training.seed in config")
     parser.add_argument("--run-name", default=None)
@@ -208,7 +209,9 @@ def main():
         config.model.kwargs = json.loads(args.model_kwargs)
 
     samples = resolve_training_samples(config, args)
-    dataset_paths = [config.dataset_paths(sample) for sample in samples]
+    dataset_paths = []
+    for sample in samples:
+        dataset_paths.extend(config.all_dataset_paths(sample, base_dir=args.data_dir))
     print(
         "Training on "
         + ", ".join(f"{sample.name} ({sample.role})" for sample in samples)

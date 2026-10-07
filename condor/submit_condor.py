@@ -138,6 +138,18 @@ def parse_arguments():
         help="List of random seeds to train multiple independent runs (train stage only)",
     )
     parser.add_argument(
+        "--comet",
+        action="store_true",
+        default=False,
+        help="Enable Comet ML tracking for training jobs",
+    )
+    parser.add_argument(
+        "--no-comet",
+        action="store_true",
+        default=False,
+        help="Explicitly disable Comet ML tracking for training jobs",
+    )
+    parser.add_argument(
         "--job-arguments",
         default="",
         help="Extra arguments appended to the stage's python command",
@@ -188,6 +200,14 @@ def job_arguments(args):
     """Arguments appended after the stage, sample and shard."""
     if args.stage == "train":
         pieces = [f"--config {args.config}"]
+        if args.samples and "--train-on" not in args.job_arguments:
+            pieces.append(f"--train-on {' '.join(args.samples)}")
+        if args.output_location == "eos" and args.eos_dir and "--data-dir" not in args.job_arguments:
+            pieces.append(f"--data-dir {args.eos_dir}")
+        if args.comet and "--comet" not in args.job_arguments:
+            pieces.append("--comet")
+        if args.no_comet and "--no-comet" not in args.job_arguments:
+            pieces.append("--no-comet")
         if args.seed is not None and not args.seeds:
             pieces.append(f"--seed {args.seed}")
     else:
@@ -222,10 +242,17 @@ def main():
         else "# no GPU requested"
     )
 
+    env_vars = []
+    if args.output_location == "eos":
+        env_vars.append(f"GAE_OUTPUT_EOS={args.eos_dir}")
+    api_key = os.environ.get("COMET_API_KEY", "8pkRGAjV7ZfkZfIKjdQQPCQuT")
+    if api_key:
+        env_vars.append(f"COMET_API_KEY={api_key}")
+
     env_setting = (
-        f'Environment             = "GAE_OUTPUT_EOS={args.eos_dir}"'
-        if args.output_location == "eos"
-        else "# Output location: local (Condor file transfer)"
+        f'Environment             = "{" ".join(env_vars)}"'
+        if env_vars
+        else "# No extra environment variables"
     )
 
     submit_file = template

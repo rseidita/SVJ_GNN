@@ -22,6 +22,24 @@ cd SVJ_GNN
 
 source setup_gae_env.sh
 
+if [ -n "${GAE_OUTPUT_EOS}" ] && [ -d "${GAE_OUTPUT_EOS}" ]; then
+    for d in data data_aimar; do
+        if [ -d "${GAE_OUTPUT_EOS}/${d}" ] && [ ! -e "${d}" ]; then
+            ln -sfn "${GAE_OUTPUT_EOS}/${d}" "${d}"
+        fi
+    done
+    if [ -d "${GAE_OUTPUT_EOS}/data" ] && [ ! -e "data_aimar" ]; then
+        ln -sfn "${GAE_OUTPUT_EOS}/data" data_aimar
+    fi
+    if [ -d "${GAE_OUTPUT_EOS}/data_aimar" ] && [ ! -e "data" ]; then
+        ln -sfn "${GAE_OUTPUT_EOS}/data_aimar" data
+    fi
+fi
+
+if [[ " $* " =~ " --comet " ]]; then
+    python -c "import comet_ml" 2>/dev/null || python -m pip install --quiet --no-cache-dir comet_ml 2>/dev/null || true
+fi
+
 case ${STAGE} in
     produce)
         python produce_graphs.py --samples "${SAMPLE}" --shard "${SHARD}" "$@"
@@ -30,7 +48,11 @@ case ${STAGE} in
         python score_gae.py --samples "${SAMPLE}" --shard "${SHARD}" "$@"
         ;;
     train)
-        python train_gae.py "$@"
+        if [[ "${SAMPLE}" =~ ^train_seed([0-9]+)$ ]]; then
+            python train_gae.py --seed "${BASH_REMATCH[1]}" "$@"
+        else
+            python train_gae.py "$@"
+        fi
         ;;
     contamination)
         YEAR="${SAMPLE%%__*}"
@@ -80,15 +102,17 @@ fi
 
 if [ -n "${GAE_OUTPUT_EOS}" ]; then
     echo "Saving ${OUTPUTS} to ${GAE_OUTPUT_EOS}"
-    for file in $(find "${OUTPUTS}" -type f); do
-        if [[ "${GAE_OUTPUT_EOS}" == root://* ]]; then
-            xrdcp -f "${file}" "${GAE_OUTPUT_EOS}/${file}"
-        else
-            dest="${GAE_OUTPUT_EOS}/${file}"
-            mkdir -p "$(dirname "${dest}")"
-            cp -f "${file}" "${dest}"
-        fi
-    done
+    if [ -d "${OUTPUTS}" ]; then
+        for file in $(find "${OUTPUTS}" -type f); do
+            if [[ "${GAE_OUTPUT_EOS}" == root://* ]]; then
+                xrdcp -f "${file}" "${GAE_OUTPUT_EOS}/${file}"
+            else
+                dest="${GAE_OUTPUT_EOS}/${file}"
+                mkdir -p "$(dirname "${dest}")"
+                cp -f "${file}" "${dest}"
+            fi
+        done
+    fi
 else
     # No EOS target, so hand the outputs back through condor file transfer.
     tar -czf "../${STAGE}_${SAMPLE}_${SHARD}_output.tar.gz" "${OUTPUTS}"

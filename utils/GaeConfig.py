@@ -8,8 +8,10 @@ model to use, and the samples split into the three roles ``signal``,
 """
 
 import dataclasses
+import glob
 import json
 import os
+import re
 
 from utils.GraphBuilder import GraphBuildConfig
 from utils.InputJson import dataset_groups, flat_files, load_input_json
@@ -165,15 +167,63 @@ class PipelineConfig:
         kwargs["label"] = label
         return GraphBuildConfig(**kwargs)
 
-    def dataset_root(self, sample):
+    def dataset_root(self, sample, base_dir=None):
         """Output directory holding the processed graphs of *sample*."""
-        return os.path.join(
-            self.production.get("output_dir", "data"), sample.name
-        )
+        prod_dir = self.production.get("output_dir", "data")
+        base = base_dir or os.environ.get("GAE_DATA_DIR")
+        if base:
+            for cand in (
+                os.path.join(base, prod_dir, sample.name),
+                os.path.join(base, "data", sample.name),
+                os.path.join(base, "data_aimar", sample.name),
+                os.path.join(base, sample.name),
+            ):
+                if os.path.isdir(os.path.join(cand, "processed")):
+                    return cand
+            return os.path.join(base, prod_dir, sample.name)
 
-    def dataset_paths(self, sample):
+        local_cand = os.path.join(prod_dir, sample.name)
+        if os.path.isdir(os.path.join(local_cand, "processed")):
+            return local_cand
+
+        eos_base = os.environ.get("GAE_DATA_DIR") or os.environ.get("GAE_OUTPUT_EOS")
+        if eos_base and os.path.isdir(eos_base):
+            for sub in (prod_dir, "data", "data_aimar"):
+                cand = os.path.join(eos_base, sub, sample.name)
+                if os.path.isdir(os.path.join(cand, "processed")):
+                    return cand
+            cand = os.path.join(eos_base, sample.name)
+            if os.path.isdir(os.path.join(cand, "processed")):
+                return cand
+
+        for sub in ("data", "data_aimar"):
+            cand = os.path.join(sub, sample.name)
+            if os.path.isdir(os.path.join(cand, "processed")):
+                return cand
+
+        return local_cand
+
+    def all_dataset_paths(self, sample, base_dir=None):
+        """List of ``[root, dataset_name]`` pairs for *sample*, expanding all shards if present."""
+        root = self.dataset_root(sample, base_dir=base_dir)
+        processed_dir = os.path.join(root, "processed")
+        base_name = sample.dataset_name
+
+        shard_pattern = os.path.join(processed_dir, f"{base_name}_shard*_meta.pt")
+        shard_meta_files = glob.glob(shard_pattern)
+        if shard_meta_files:
+            def shard_key(p):
+                m = re.search(r"_shard(\d+)_meta\.pt$", p)
+                return int(m.group(1)) if m else 0
+            shard_meta_files.sort(key=shard_key)
+            return [[root, os.path.basename(smf)[:-8]] for smf in shard_meta_files]
+
+        return [[root, base_name]]
+
+    def dataset_paths(self, sample, base_dir=None):
         """``[root, dataset_name]`` pair as expected by GraphDataLoader."""
-        return [self.dataset_root(sample), sample.dataset_name]
+        paths = self.all_dataset_paths(sample, base_dir=base_dir)
+        return paths[0]
 
 
 def load_config(path="gae_config.json"):
