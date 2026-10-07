@@ -40,8 +40,8 @@ def parse_arguments():
     parser.add_argument("--config", default="gae_config.json")
     parser.add_argument(
         "--scores-dir",
-        default="output_scores",
-        help="Directory of score ROOT files from score_gae.py",
+        default=None,
+        help="Directory of score ROOT files (defaults to scoring.output_dir in config)",
     )
     parser.add_argument(
         "--samples",
@@ -53,7 +53,11 @@ def parse_arguments():
         ),
     )
     parser.add_argument("--history", default=None)
-    parser.add_argument("--outdir", default="plots")
+    parser.add_argument(
+        "--outdir",
+        default=None,
+        help="Output directory for plots (defaults to plotting.plots_dir in config)",
+    )
     parser.add_argument(
         "--formats",
         default="pdf",
@@ -238,7 +242,7 @@ def load_samples(config, scores_dir, sample_names=None):
     return overlays, pool_discovered(overlays, roles)
 
 
-def residual_plots(args, config, formats):
+def residual_plots(args, config, formats, outdir):
     """Residual and latent plots, which need the model and a graph dataset."""
     import torch
 
@@ -272,7 +276,7 @@ def residual_plots(args, config, formats):
     plot_feature_residuals(
         model,
         loader,
-        os.path.join(args.outdir, "feature_residuals"),
+        os.path.join(outdir, "feature_residuals"),
         device=args.device,
         max_batches=args.max_batches,
         bins=args.bins,
@@ -281,7 +285,7 @@ def residual_plots(args, config, formats):
     plot_latent_distributions(
         model,
         loader,
-        os.path.join(args.outdir, "latent_distributions"),
+        os.path.join(outdir, "latent_distributions"),
         device=args.device,
         max_batches=args.max_batches,
         bins=args.bins,
@@ -293,42 +297,44 @@ def main():
     args = parse_arguments()
     config = load_config(args.config)
     formats = tuple(args.formats.split(","))
-    os.makedirs(args.outdir, exist_ok=True)
+    scores_dir = args.scores_dir or config.scoring.get("output_dir", "output_scores")
+    outdir = args.outdir or config.plotting.get("plots_dir", "plots")
+    os.makedirs(outdir, exist_ok=True)
 
     if args.history is not None:
         with open(args.history) as history_file:
             history = json.load(history_file)
         plot_loss_curves(
             history,
-            os.path.join(args.outdir, "loss_curves"),
+            os.path.join(outdir, "loss_curves"),
             formats=formats,
         )
         print("Wrote loss_curves")
 
     overlays, pooled = load_samples(
-        config, args.scores_dir, sample_names=args.samples
+        config, scores_dir, sample_names=args.samples
     )
     if not overlays:
         print(
-            f"No score files found in '{args.scores_dir}'; run score_gae.py "
+            f"No score files found in '{scores_dir}'; run score_gae.py "
             "first to make the score based plots"
         )
     else:
         histograms = plot_score_distributions(
             overlays,
-            os.path.join(args.outdir, "score_distributions"),
+            os.path.join(outdir, "score_distributions"),
             bins=args.bins,
             density=True,
             formats=formats,
         )
         plot_loss_efficiency(
             overlays,
-            os.path.join(args.outdir, "loss_efficiency"),
+            os.path.join(outdir, "loss_efficiency"),
             formats=formats,
         )
         print("Wrote score_distributions and loss_efficiency")
 
-        write_th1s(os.path.join(args.outdir, "histograms.root"), histograms)
+        write_th1s(os.path.join(outdir, "histograms.root"), histograms)
         print("Wrote histograms.root")
 
         if args.samples:
@@ -350,14 +356,14 @@ def main():
             plot_roc(
                 signals,
                 background_scores,
-                os.path.join(args.outdir, "roc"),
+                os.path.join(outdir, "roc"),
                 weights_background=background_weights,
                 formats=formats,
             )
             plot_sic_vs_fpr(
                 signals,
                 background_scores,
-                os.path.join(args.outdir, "sic_vs_fpr"),
+                os.path.join(outdir, "sic_vs_fpr"),
                 weights_background=background_weights,
                 formats=formats,
             )
@@ -369,10 +375,10 @@ def main():
             )
 
     if args.checkpoint is not None and args.residual_sample is not None:
-        residual_plots(args, config, formats)
+        residual_plots(args, config, formats, outdir)
         print("Wrote feature_residuals and latent_distributions")
 
-    print(f"Plots are in {args.outdir}")
+    print(f"Plots are in {outdir}")
 
 
 if __name__ == "__main__":

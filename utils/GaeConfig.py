@@ -108,6 +108,8 @@ class PipelineConfig:
     training: dict
     model: ModelConfig
     samples: dict
+    scoring: dict = dataclasses.field(default_factory=dict)
+    plotting: dict = dataclasses.field(default_factory=dict)
     path: str = None
 
     def sample(self, name):
@@ -191,5 +193,7 @@ def load_config(path="gae_config.json"):
         training=raw.get("training", {}),
         model=ModelConfig(**raw.get("model", {})),
         samples=samples,
+        scoring=raw.get("scoring", {}),
+        plotting=raw.get("plotting", {}),
         path=path,
     )

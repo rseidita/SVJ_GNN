@@ -45,7 +45,8 @@ def parse_arguments():
         default=None,
         help="Data sample names to train on; defaults to every data sample",
     )
-    parser.add_argument("--output-dir", default="training")
+    parser.add_argument("--output-dir", default=None, help="Directory for training checkpoints; defaults to training.output_dir in config")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for model initialization and training RNG; defaults to training.seed in config")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
@@ -96,7 +97,7 @@ def parse_arguments():
 
 def training_settings(config, args):
     settings = dict(config.training)
-    for name in ("epochs", "batch_size", "learning_rate", "alpha"):
+    for name in ("epochs", "batch_size", "learning_rate", "alpha", "seed"):
         value = getattr(args, name)
         if value is not None:
             settings[name] = value
@@ -220,8 +221,23 @@ def main():
     )
     print(f"Using device {device}")
 
-    run_name = args.run_name or config.model.spec.replace(".", "_")
-    output_dir = os.path.join(args.output_dir, run_name)
+    active_seed = settings.get("seed")
+    if active_seed is not None:
+        torch.manual_seed(active_seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(active_seed)
+        import numpy as np
+        np.random.seed(active_seed)
+        import random
+        random.seed(active_seed)
+        print(f"Using random seed: {active_seed}")
+
+    base_output_dir = args.output_dir or config.training.get("output_dir", "training")
+    default_run_name = config.model.spec.replace(".", "_")
+    if active_seed is not None:
+        default_run_name = f"{default_run_name}_seed{active_seed}"
+    run_name = args.run_name or default_run_name
+    output_dir = os.path.join(base_output_dir, run_name)
     os.makedirs(output_dir, exist_ok=True)
 
     checkpoint_data = None
@@ -362,6 +378,7 @@ def main():
             "stds": stds,
             "split_state": split_state,
             "alpha": alpha,
+            "seed": active_seed,
             "graph": dict(config.graph),
             "training": settings,
             "train_samples": [sample.name for sample in samples],

@@ -25,15 +25,12 @@ source setup_gae_env.sh
 case ${STAGE} in
     produce)
         python produce_graphs.py --samples "${SAMPLE}" --shard "${SHARD}" "$@"
-        OUTPUTS="data"
         ;;
     score)
         python score_gae.py --samples "${SAMPLE}" --shard "${SHARD}" "$@"
-        OUTPUTS="output_scores"
         ;;
     train)
         python train_gae.py "$@"
-        OUTPUTS="training"
         ;;
     contamination)
         YEAR="${SAMPLE%%__*}"
@@ -53,10 +50,44 @@ case ${STAGE} in
         ;;
 esac
 
+if [ -z "${OUTPUTS}" ]; then
+    OUTPUTS=$(python3 -c '
+import json, sys
+stage = sys.argv[1]
+args = sys.argv[2:]
+cfg_path = "gae_config.json"
+out_dir = None
+for i, a in enumerate(args):
+    if a == "--config" and i + 1 < len(args):
+        cfg_path = args[i+1]
+    elif a == "--output-dir" and i + 1 < len(args):
+        out_dir = args[i+1]
+if out_dir:
+    print(out_dir)
+    sys.exit(0)
+defaults = {"produce": "data", "train": "training", "score": "output_scores"}
+default_out = defaults.get(stage, "")
+try:
+    with open(cfg_path) as f:
+        d = json.load(f)
+    section = "production" if stage == "produce" else ("training" if stage == "train" else "scoring")
+    val = d.get(section, {}).get("output_dir", default_out)
+    print(val or default_out)
+except Exception:
+    print(default_out)
+' "${STAGE}" "$@")
+fi
+
 if [ -n "${GAE_OUTPUT_EOS}" ]; then
-    echo "Copying ${OUTPUTS} to ${GAE_OUTPUT_EOS}"
+    echo "Saving ${OUTPUTS} to ${GAE_OUTPUT_EOS}"
     for file in $(find "${OUTPUTS}" -type f); do
-        xrdcp -f "${file}" "${GAE_OUTPUT_EOS}/${file}"
+        if [[ "${GAE_OUTPUT_EOS}" == root://* ]]; then
+            xrdcp -f "${file}" "${GAE_OUTPUT_EOS}/${file}"
+        else
+            dest="${GAE_OUTPUT_EOS}/${file}"
+            mkdir -p "$(dirname "${dest}")"
+            cp -f "${file}" "${dest}"
+        fi
     done
 else
     # No EOS target, so hand the outputs back through condor file transfer.
