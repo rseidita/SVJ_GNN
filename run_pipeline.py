@@ -173,19 +173,25 @@ def parse_arguments():
         help="History JSON path to use for loss curve plotting",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for model initialization and training RNG (defaults to training.seed in config)",
+    )
+    parser.add_argument(
         "--output-dir",
-        default="training",
-        help="Directory for training output checkpoints and histories",
+        default=None,
+        help="Directory for training output checkpoints (defaults to training.output_dir in config)",
     )
     parser.add_argument(
         "--scores-dir",
-        default="output_scores",
-        help="Directory for score ROOT files",
+        default=None,
+        help="Directory for score ROOT files (defaults to scoring.output_dir in config)",
     )
     parser.add_argument(
         "--plots-dir",
-        default="plots",
-        help="Directory for output figures and histograms.root",
+        default=None,
+        help="Directory for output figures (defaults to plotting.plots_dir in config)",
     )
     parser.add_argument(
         "--max-events",
@@ -244,10 +250,19 @@ def main():
     print(f"Pipeline initialized with steps: {steps_to_run}")
     print(f"Device: {device}")
 
+    # Resolve config-driven paths and active seed
+    active_seed = args.seed if args.seed is not None else config.training.get("seed")
+    training_output_dir = args.output_dir or config.training.get("output_dir", "training")
+    scores_output_dir = args.scores_dir or config.scoring.get("output_dir", "output_scores")
+    plots_output_dir = args.plots_dir or config.plotting.get("plots_dir", "plots")
+
     # Determine run name and checkpoint path
-    run_name = args.run_name or (args.model_spec or config.model.spec).replace(".", "_")
-    checkpoint_path = args.checkpoint or os.path.join(args.output_dir, run_name, "checkpoint.pt")
-    history_path = args.history or os.path.join(args.output_dir, run_name, "history.json")
+    default_run_name = (args.model_spec or config.model.spec).replace(".", "_")
+    if active_seed is not None:
+        default_run_name = f"{default_run_name}_seed{active_seed}"
+    run_name = args.run_name or default_run_name
+    checkpoint_path = args.checkpoint or os.path.join(training_output_dir, run_name, "checkpoint.pt")
+    history_path = args.history or os.path.join(training_output_dir, run_name, "history.json")
 
     # Step 1: Produce Graphs
     if "produce" in steps_to_run:
@@ -273,9 +288,11 @@ def main():
             sys.executable,
             os.path.join(SCRIPT_DIR, "train_gae.py"),
             "--config", args.config,
-            "--output-dir", args.output_dir,
+            "--output-dir", training_output_dir,
             "--device", device,
         ]
+        if active_seed is not None:
+            train_cmd.extend(["--seed", str(active_seed)])
         if args.train_on:
             train_cmd.extend(["--train-on", *args.train_on])
         if args.epochs:
@@ -315,7 +332,7 @@ def main():
     if "score" in steps_to_run:
         if not os.path.exists(checkpoint_path):
             for candidate in ("checkpoint_best.pt", "checkpoint_latest.pt"):
-                alt_path = os.path.join(args.output_dir, run_name, candidate)
+                alt_path = os.path.join(training_output_dir, run_name, candidate)
                 if os.path.exists(alt_path):
                     checkpoint_path = alt_path
                     break
@@ -328,7 +345,7 @@ def main():
             os.path.join(SCRIPT_DIR, "score_gae.py"),
             "--config", args.config,
             "--checkpoint", checkpoint_path,
-            "--output-dir", args.scores_dir,
+            "--output-dir", scores_output_dir,
             "--region", args.region,
             "--device", device,
         ]
@@ -348,8 +365,8 @@ def main():
             sys.executable,
             os.path.join(SCRIPT_DIR, "plot_gae.py"),
             "--config", args.config,
-            "--scores-dir", args.scores_dir,
-            "--outdir", args.plots_dir,
+            "--scores-dir", scores_output_dir,
+            "--outdir", plots_output_dir,
         ]
         if os.path.exists(history_path):
             plot_cmd.extend(["--history", history_path])

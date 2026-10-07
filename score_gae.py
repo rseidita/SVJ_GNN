@@ -60,8 +60,8 @@ def parse_arguments():
     )
     parser.add_argument(
         "--output-dir",
-        default="output_scores",
-        help="Directory for local score ROOT files (one per input file)",
+        default=None,
+        help="Directory for local score ROOT files (defaults to scoring.output_dir in config)",
     )
     parser.add_argument(
         "--extra-branches",
@@ -190,7 +190,8 @@ def main():
 
     graph_settings = checkpoint["graph"]
     max_jets = graph_settings.get("n_store_jets")
-    os.makedirs(args.output_dir, exist_ok=True)
+    output_dir = args.output_dir or config.scoring.get("output_dir", "output_scores")
+    os.makedirs(output_dir, exist_ok=True)
 
     for sample in config.select(args.samples):
         name = sample.name
@@ -274,7 +275,7 @@ def main():
             output_name = score_output_basename(
                 sample.role, file_path, sample_name=name, dataset=dataset
             )
-            output_path = os.path.join(args.output_dir, output_name)
+            output_path = os.path.join(output_dir, output_name)
             write_score_file(output_path, columns)
             n_jets = len(columns["score"])
             n_jets_total += n_jets

@@ -17,6 +17,8 @@
     "worker_prefetch": 2
   },
   "training": {
+    "output_dir": "training_aimar",
+    "seed": null,
     "epochs": 20,
     "batch_size": 64,
     "learning_rate": 0.001,
@@ -27,6 +29,13 @@
     "validation_window": [0.7, 0.85],
     "test_window": [0.85, 1.0],
     "comet_project": "svj-gae"
+  },
+  "scoring": {
+    "output_dir": "output_scores_aimar",
+    "region": "signal_region"
+  },
+  "plotting": {
+    "plots_dir": "plots_aimar"
   },
   "model": {
     "spec": "GraphAEBatchNorm.GraphAEBatchNorm",
@@ -104,4 +113,3 @@
     }
   }
 }
-
