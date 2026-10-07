@@ -2,15 +2,18 @@
 """Score ROOT files with a trained autoencoder and write per-jet scores.
 
 Graphs are streamed straight from the ROOT files by RootGraphScorer, so no
-intermediate .pt datasets are needed. The selections in utils/Cuts.py are
+intermediate .pt datasets are needed. The selections in utils.Cuts.py are
 applied afterwards, using the fact that the scorer returns its scores in the
 original event and jet order.
 
     python score_gae.py --checkpoint training/GraphAE_graphAE/checkpoint.pt
-    python score_gae.py --checkpoint ... --samples smoke
+    python score_gae.py --checkpoint ... --samples data_2018 qcd_2018
 
-One output file per sample is written to --output-dir, holding a flat
-'Scores' tree with one entry per selected jet.
+Each input ROOT file is written as a separate local file under --output-dir,
+named ``data_part-0.root``, ``qcd_part-0.root``,
+``signal_mMed-1000_mDark-20_rinv-0.3_part-0.root``, and so on. Remote
+``root://`` paths are read as-is and never turned into local paths under the
+working directory.
 """
 
 import argparse
@@ -21,10 +24,25 @@ import numpy as np
 import uproot
 
 from architectures.ModelRegistry import build_model
-from utils.Cuts import CUT_BRANCHES, event_cut_mask, jet_cut_mask
-from utils.FileLists import resolve_file_list, shard_file_list
+from utils.Cuts import (
+    add_cutflow,
+    cut_branches,
+    cutflow,
+    event_cut_mask,
+    format_cutflow,
+    jet_cut_mask,
+)
 from utils.GaeConfig import load_config
 from utils.GraphBuilder import GraphBuildConfig, pfnano_branches
+from utils.InputJson import (
+    dataset_of,
+    flat_files,
+    normalize_input_path,
+    resolve_file_selection,
+    score_output_basename,
+    shard_files,
+    sum_initial_events,
+)
 from utils.RootGraphScorer import RootGraphScorer
 
 import torch
@@ -40,7 +58,11 @@ def parse_arguments():
         default=None,
         help="Sample names to score; defaults to every configured sample",
     )
-    parser.add_argument("--output-dir", default="scores")
+    parser.add_argument(
+        "--output-dir",
+        default="output_scores",
+        help="Directory for local score ROOT files (one per input file)",
+    )
     parser.add_argument(
         "--extra-branches",
         nargs="+",
@@ -54,6 +76,18 @@ def parse_arguments():
     parser.add_argument("--device", default=None)
     parser.add_argument("--files-per-job", type=int, default=None)
     parser.add_argument("--shard", type=int, default=None)
+    parser.add_argument(
+        "--files",
+        nargs="+",
+        default=None,
+        help="Score only these input files (xrootd URLs or local paths)",
+    )
+    parser.add_argument(
+        "--region",
+        default="control",
+        choices=["control", "signal_region", "signal", "validation", "highRT", "lowRT", "inclusive"],
+        help="Selection region (control, signal_region, validation, inclusive)",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
@@ -70,8 +104,9 @@ def graph_build_config(graph_settings, label=0.0):
     return GraphBuildConfig(**kwargs)
 
 
-def base_event_weight(file_path, weights):
+def base_event_weight(file_path, weights, groups, initial_events_cache):
     """Per-event weight for a file: the cross section weight, or one."""
+    file_path = normalize_input_path(file_path)
     if weights != "xsec":
         return 1.0
     with uproot.open(file_path) as input_file:
@@ -81,19 +116,16 @@ def base_event_weight(file_path, weights):
                 "cannot be used for this sample"
             )
         xsec = input_file["Metadata"]["GenCrossSection"].array(entry_stop=1)[0]
-        n_initial = input_file["CutFlow"]["Initial"].array(entry_stop=1)[0]
-    return float(xsec / n_initial)
+    dataset = dataset_of(file_path, groups)
+    if dataset not in initial_events_cache:
+        initial_events_cache[dataset] = sum_initial_events(groups[dataset])
+    return float(xsec / initial_events_cache[dataset])
 
 
-def select_scored_jets(scores, events, config, weight, extra_branches):
-    """Flatten jagged scores to selected jets, applying the shared cuts."""
-    mask = np.asarray(event_cut_mask(events), dtype=bool)
-    if mask.shape != (len(events),):
-        raise ValueError(
-            "event_cut_mask must return one boolean per event, got shape "
-            f"{mask.shape} for {len(events)} events"
-        )
-
+def select_scored_jets(
+    scores, selected_events, original_entries, config, weight, extra_branches
+):
+    """Flatten jagged scores to selected jets."""
     columns = {
         "entry": [],
         "jet": [],
@@ -103,10 +135,8 @@ def select_scored_jets(scores, events, config, weight, extra_branches):
     for name in extra_branches:
         columns[name] = []
 
-    for entry in np.flatnonzero(mask):
-        event = events[entry]
-        for jet_index, score in enumerate(scores[entry]):
-            # NaN marks a jet the scorer could not build a graph for.
+    for idx, (entry, event) in enumerate(zip(original_entries, selected_events)):
+        for jet_index, score in enumerate(scores[idx]):
             if not np.isfinite(score):
                 continue
             if not jet_cut_mask(event, jet_index, config):
@@ -119,6 +149,21 @@ def select_scored_jets(scores, events, config, weight, extra_branches):
                 columns[name].append(float(event[name]))
 
     return columns
+
+
+def write_score_file(output_path, columns):
+    with uproot.recreate(output_path) as output_file:
+        output_file["Scores"] = {
+            key: np.asarray(values) for key, values in columns.items()
+        }
+
+
+def score_paths_for_sample(sample, args):
+    groups = sample.groups()
+    file_paths = resolve_file_selection(flat_files(groups), args.files)
+    if args.files_per_job is not None and args.shard is not None:
+        file_paths = shard_files(file_paths, args.files_per_job)[args.shard]
+    return groups, file_paths
 
 
 def main():
@@ -147,9 +192,8 @@ def main():
     max_jets = graph_settings.get("n_store_jets")
     os.makedirs(args.output_dir, exist_ok=True)
 
-    names = args.samples if args.samples else sorted(config.samples)
-    for name in names:
-        sample = config.sample(name)
+    for sample in config.select(args.samples):
+        name = sample.name
         build_config = graph_build_config(graph_settings, sample.label)
 
         scorer = RootGraphScorer(
@@ -169,55 +213,81 @@ def main():
             verbose=verbose,
         )
 
-        file_paths = resolve_file_list(sample.file_list)
-        if args.files_per_job is not None and args.shard is not None:
-            file_paths = shard_file_list(file_paths, args.files_per_job)[
-                args.shard
-            ]
+        groups, file_paths = score_paths_for_sample(sample, args)
+        initial_events_cache = {}
 
-        branches = list(CUT_BRANCHES)
+        branches = cut_branches(sample.role, sample.year, region=args.region)
         for branch in args.extra_branches:
             if branch not in branches:
                 branches.append(branch)
-        # The jet selection may look at the jet collection, so read the
-        # graph-building branches too.
         read_branches = sorted(
             set(branches) | set(pfnano_branches(build_config))
         )
 
-        columns = None
+        cutflows = {}
+        n_jets_total = 0
         for file_path in file_paths:
-            scores = scorer.score_file(file_path)
-            weight = base_event_weight(file_path, sample.weights)
+            file_path = normalize_input_path(file_path)
+            weight = base_event_weight(
+                file_path, sample.weights, groups, initial_events_cache
+            )
             with uproot.open(f"{file_path}:Events") as tree:
                 events = tree.arrays(
                     read_branches,
-                    entry_stop=len(scores),
+                    entry_stop=args.max_events,
                     library="ak",
                 )
-            file_columns = select_scored_jets(
-                scores, events, build_config, weight, args.extra_branches
+            dataset = dataset_of(file_path, groups)
+            cutflows[dataset] = add_cutflow(
+                cutflows.get(dataset, {}),
+                cutflow(events, sample.role, sample.year, region=args.region),
             )
-            if columns is None:
-                columns = file_columns
-            else:
-                for key, values in file_columns.items():
-                    columns[key].extend(values)
+            mask = np.asarray(
+                event_cut_mask(events, sample.role, sample.year, region=args.region),
+                dtype=bool,
+            )
+            if not mask.any():
+                print(
+                    f"No selected events in {os.path.basename(file_path)} "
+                    f"for sample '{name}' (region={args.region}); skipping scoring"
+                )
+                continue
 
-        if not columns or not columns["score"]:
+            selected_events = events[mask]
+            original_entries = np.flatnonzero(mask)
+            scores = scorer.score_events(selected_events)
+            columns = select_scored_jets(
+                scores,
+                selected_events,
+                original_entries,
+                build_config,
+                weight,
+                args.extra_branches,
+            )
+            if not columns["score"]:
+                print(
+                    f"No selected jets in {os.path.basename(file_path)} "
+                    f"for sample '{name}'; skipping output"
+                )
+                continue
+
+            output_name = score_output_basename(
+                sample.role, file_path, sample_name=name, dataset=dataset
+            )
+            output_path = os.path.join(args.output_dir, output_name)
+            write_score_file(output_path, columns)
+            n_jets = len(columns["score"])
+            n_jets_total += n_jets
+            print(
+                f"Wrote {output_path} ({n_jets} jets) "
+                f"<= {file_path}"
+            )
+
+        for dataset, counts in cutflows.items():
+            print(format_cutflow(f"{name} / {dataset} (scoring, region={args.region})", counts))
+
+        if not n_jets_total:
             print(f"Sample '{name}' has no selected jets; nothing written")
-            continue
-
-        output_path = os.path.join(args.output_dir, f"{name}.root")
-        with uproot.recreate(output_path) as output_file:
-            output_file["Scores"] = {
-                key: np.asarray(values)
-                for key, values in columns.items()
-            }
-        print(
-            f"Wrote {output_path} with {len(columns['score'])} selected jets "
-            f"for sample '{name}' ({sample.role})"
-        )
 
 
 if __name__ == "__main__":

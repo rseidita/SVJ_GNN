@@ -163,9 +163,12 @@ cython_debug/
 .venv-gae/
 data/
 scores/
+output_scores/
 plots/
 training/
 condor/logs/
 condor/submit/
 crab/crab_projects/
 crab/SVJ_GNN.tar.gz
+*.npz
+cache_*

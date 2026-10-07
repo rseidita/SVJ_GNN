@@ -1,23 +1,31 @@
 #!/usr/bin/env python3
-"""Build graph datasets from the ROOT files listed in a sample's file list.
+"""Build graph datasets from the ROOT files in a sample's input JSON.
 
-The selections in utils/Cuts.py are applied to every sample, so signal,
-background and data are treated identically.
+The selections in utils/Cuts.py are applied to every sample according to
+its role and year.
 
-    python produce_graphs.py --samples background_example
+    python produce_graphs.py --samples background_2018
     python produce_graphs.py --samples smoke --max-events 200
 
-One shard of a condor or crab job processes a subset of the file list:
+One shard of a condor or crab job processes a subset of the files:
 
-    python produce_graphs.py --samples background_example \
+    python produce_graphs.py --samples background_2018 \
         --shard 3 --files-per-job 5
 """
 
 import argparse
 import os
 
-from utils.FileLists import resolve_file_list, shard_file_list
+import uproot
+
+from utils.Cuts import add_cutflow, cut_branches, cutflow, format_cutflow
 from utils.GaeConfig import load_config
+from utils.InputJson import (
+    dataset_of,
+    flat_files,
+    resolve_file_selection,
+    shard_files,
+)
 from utils.JetGraphProducer import FileListGraphProducer
 
 
@@ -46,8 +54,42 @@ def parse_arguments():
         help="Shard the file list, processing only --shard of the shards",
     )
     parser.add_argument("--shard", type=int, default=None)
+    parser.add_argument(
+        "--files",
+        nargs="+",
+        default=None,
+        help="Process only these files of the sample (used by CRAB jobs)",
+    )
+    parser.add_argument(
+        "--no-cutflow",
+        action="store_true",
+        help="Skip the per-dataset cutflow pass over the input files",
+    )
+    parser.add_argument(
+        "--region",
+        default="control",
+        choices=["control", "signal_region", "signal", "validation", "highRT", "lowRT", "inclusive"],
+        help="Selection region (control, signal_region, validation, inclusive)",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
+
+
+def print_cutflows(sample, file_paths, groups, max_events, region="control"):
+    """Cumulative selection counts per dataset, summed over *file_paths*."""
+    branches = cut_branches(sample.role, sample.year, region=region)
+    totals = {}
+    for file_path in file_paths:
+        with uproot.open(f"{file_path}:Events") as tree:
+            events = tree.arrays(branches, entry_stop=max_events, library="ak")
+        dataset = dataset_of(file_path, groups)
+        totals[dataset] = add_cutflow(
+            totals.get(dataset, {}),
+            cutflow(events, sample.role, sample.year, region=region),
+        )
+    for dataset, counts in totals.items():
+        n_files = sum(dataset_of(path, groups) == dataset for path in file_paths)
+        print(format_cutflow(f"{sample.name} / {dataset} ({n_files} files)", counts))
 
 
 def producer_kwargs(config, sample, args):
@@ -72,16 +114,17 @@ def producer_kwargs(config, sample, args):
     kwargs["label"] = sample.label
     kwargs["max_events_to_process"] = args.max_events
     kwargs["verbose"] = not args.quiet
+    kwargs["region"] = args.region
     return kwargs
 
 
-def select_files(config, sample, args):
-    paths = resolve_file_list(sample.file_list)
+def select_files(groups, sample, args):
+    paths = resolve_file_selection(flat_files(groups), args.files)
     if args.files_per_job is None and args.shard is None:
         return paths
     if args.files_per_job is None or args.shard is None:
         raise ValueError("--files-per-job and --shard must be used together")
-    shards = shard_file_list(paths, args.files_per_job)
+    shards = shard_files(paths, args.files_per_job)
     if not 0 <= args.shard < len(shards):
         raise ValueError(
             f"--shard {args.shard} is out of range; sample {sample.name!r} "
@@ -96,23 +139,29 @@ def main():
     if args.output_dir is not None:
         config.production["output_dir"] = args.output_dir
 
-    names = args.samples if args.samples else sorted(config.samples)
-    for name in names:
-        sample = config.sample(name)
-        file_paths = select_files(config, sample, args)
+    for sample in config.select(args.samples):
+        name = sample.name
+        groups = sample.groups()
+        file_paths = select_files(groups, sample, args)
         root = config.dataset_root(sample)
         dataset_name = sample.dataset_name
         if args.shard is not None:
             dataset_name = f"{dataset_name}_shard{args.shard}"
 
         print(
-            f"Producing graphs for sample '{name}' ({sample.role}) from "
-            f"{len(file_paths)} file(s) into {os.path.join(root, 'processed')}"
+            f"Producing graphs for sample '{name}' ({sample.role}, "
+            f"{sample.year}, region={args.region}) from {len(file_paths)} file(s) in "
+            f"{len(groups)} dataset(s) into {os.path.join(root, 'processed')}"
         )
+        if not args.no_cutflow:
+            print_cutflows(sample, file_paths, groups, args.max_events, region=args.region)
         dataset = FileListGraphProducer(
             root=root,
             output_dataset_name=dataset_name,
             file_paths=file_paths,
+            role=sample.role,
+            year=sample.year,
+            dataset_groups=groups,
             **producer_kwargs(config, sample, args),
         )
         print(f"--> {len(dataset)} graphs")

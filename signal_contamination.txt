@@ -1,0 +1,602 @@
+
+--- 2018 data (1405 files) ---
+
+--- 2018 qcd (144 files) ---
+
+--- 2018 s-channel_mMed-1000_mDark-20_rinv-0.3 (19 files) ---
+
+--- 2018 s-channel_mMed-1000_mDark-20_rinv-0.5 (19 files) ---
+
+--- 2018 s-channel_mMed-1000_mDark-20_rinv-0.7 (5 files) ---
+
+--- 2018 s-channel_mMed-1100_mDark-20_rinv-0.3 (19 files) ---
+
+--- 2018 s-channel_mMed-1100_mDark-20_rinv-0.5 (19 files) ---
+
+--- 2018 s-channel_mMed-1100_mDark-20_rinv-0.7 (5 files) ---
+
+--- 2018 s-channel_mMed-1200_mDark-20_rinv-0.3 (19 files) ---
+
+--- 2018 s-channel_mMed-1200_mDark-20_rinv-0.5 (19 files) ---
+
+--- 2018 s-channel_mMed-1200_mDark-20_rinv-0.7 (10 files) ---
+
+--- 2018 s-channel_mMed-1300_mDark-20_rinv-0.3 (19 files) ---
+
+--- 2018 s-channel_mMed-1300_mDark-20_rinv-0.5 (18 files) ---
+
+--- 2018 s-channel_mMed-1300_mDark-20_rinv-0.7 (9 files) ---
+
+--- 2018 s-channel_mMed-1400_mDark-20_rinv-0.3 (16 files) ---
+
+--- 2018 s-channel_mMed-1400_mDark-20_rinv-0.5 (16 files) ---
+
+--- 2018 s-channel_mMed-1400_mDark-20_rinv-0.7 (15 files) ---
+
+--- 2018 s-channel_mMed-1500_mDark-20_rinv-0.3 (16 files) ---
+
+--- 2018 s-channel_mMed-1500_mDark-20_rinv-0.5 (16 files) ---
+
+--- 2018 s-channel_mMed-1500_mDark-20_rinv-0.7 (11 files) ---
+
+--- 2018 s-channel_mMed-500_mDark-20_rinv-0.3 (1 files) ---
+
+--- 2018 s-channel_mMed-500_mDark-20_rinv-0.5 (1 files) ---
+
+--- 2018 s-channel_mMed-500_mDark-20_rinv-0.7 (1 files) ---
+
+--- 2018 s-channel_mMed-600_mDark-20_rinv-0.3 (2 files) ---
+
+--- 2018 s-channel_mMed-600_mDark-20_rinv-0.5 (1 files) ---
+
+--- 2018 s-channel_mMed-600_mDark-20_rinv-0.7 (1 files) ---
+
+--- 2018 s-channel_mMed-700_mDark-20_rinv-0.3 (3 files) ---
+
+--- 2018 s-channel_mMed-700_mDark-20_rinv-0.5 (3 files) ---
+
+--- 2018 s-channel_mMed-700_mDark-20_rinv-0.7 (2 files) ---
+
+--- 2018 s-channel_mMed-800_mDark-20_rinv-0.3 (7 files) ---
+
+--- 2018 s-channel_mMed-800_mDark-20_rinv-0.5 (5 files) ---
+
+--- 2018 s-channel_mMed-800_mDark-20_rinv-0.7 (2 files) ---
+
+--- 2018 s-channel_mMed-900_mDark-20_rinv-0.3 (19 files) ---
+
+--- 2018 s-channel_mMed-900_mDark-20_rinv-0.5 (10 files) ---
+
+--- 2018 s-channel_mMed-900_mDark-20_rinv-0.7 (3 files) ---
+
+Weighting note:
+  N_pass   = unweighted skim events passing all GAE cuts
+  W_pass   = sum(sigma/N_gen) over passing MC events (not physical alone)
+  N_phys   = data: N_pass; MC 2018: L_pre*W_pre + L_hem*W_post; else L*W_pass
+  L_2018   = 59.74 fb-1 total (pre-HEM 21.1, post-HEM 38.64)
+  Partial reads/shards bias MC weights that use full-dataset N_gen.
+
+--- 2018 data ---
+  N_pass (counts)     876784
+  W_pass (MC weight)  876784
+  N_phys              8.768e+05
+  pre-HEM             N=339562  W=339562  N_phys=3.396e+05
+  post-HEM            N=537222  W=537222  N_phys=5.372e+05
+Cutflow 2018 data cutflow
+                                 events     abs.     rel.
+  skim                          5472083   1.0000   1.0000
+  isGood j0,j1                  5472078   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2      889543   0.1626   0.1626
+  post-HEM gap-jet veto          876784   0.1602   0.9857
+
+--- 2018 QCD (pooled HT) ---
+  N_pass (counts)     58996
+  W_pass (MC weight)  16.9183
+  N_phys              543.5
+  pre-HEM             N=22337  W=6.28474  N_phys=132.6
+  post-HEM            N=36659  W=10.6335  N_phys=410.9
+Cutflow 2018 QCD (pooled HT) cutflow
+                                 events     abs.     rel.
+  skim                           510531   1.0000   1.0000
+  isGood j0,j1                   510531   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       63240   0.1239   0.1239
+  post-HEM gap-jet veto           62334   0.1221   0.9857
+  post-HEM HEMVeto                58996   0.1156   0.9464
+
+--- 2018 signal mMed-1000_mDark-20_rinv-0.3 ---
+  N_pass (counts)     8360
+  W_pass (MC weight)  0.041478
+  N_phys              1.332
+  pre-HEM             N=3114  W=0.0154501  N_phys=0.326
+  post-HEM            N=5246  W=0.026028  N_phys=1.006
+Cutflow 2018 signal mMed-1000_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           148628   1.0000   1.0000
+  isGood j0,j1                   148628   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        8833   0.0594   0.0594
+  post-HEM gap-jet veto            8777   0.0591   0.9937
+  post-HEM HEMVeto                 8360   0.0562   0.9525
+
+--- 2018 signal mMed-1000_mDark-20_rinv-0.5 ---
+  N_pass (counts)     6304
+  W_pass (MC weight)  0.0314707
+  N_phys              1.009
+  pre-HEM             N=2366  W=0.0118115  N_phys=0.2492
+  post-HEM            N=3938  W=0.0196592  N_phys=0.7596
+Cutflow 2018 signal mMed-1000_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                            98528   1.0000   1.0000
+  isGood j0,j1                    98528   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        6728   0.0683   0.0683
+  post-HEM gap-jet veto            6649   0.0675   0.9883
+  post-HEM HEMVeto                 6304   0.0640   0.9481
+
+--- 2018 signal mMed-1000_mDark-20_rinv-0.7 ---
+  N_pass (counts)     3013
+  W_pass (MC weight)  0.0149941
+  N_phys              0.483
+  pre-HEM             N=1104  W=0.00549404  N_phys=0.1159
+  post-HEM            N=1909  W=0.0095001  N_phys=0.3671
+Cutflow 2018 signal mMed-1000_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            39174   1.0000   1.0000
+  isGood j0,j1                    39174   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        3216   0.0821   0.0821
+  post-HEM gap-jet veto            3156   0.0806   0.9813
+  post-HEM HEMVeto                 3013   0.0769   0.9547
+
+--- 2018 signal mMed-1100_mDark-20_rinv-0.3 ---
+  N_pass (counts)     12693
+  W_pass (MC weight)  0.0426366
+  N_phys              1.368
+  pre-HEM             N=4743  W=0.015932  N_phys=0.3362
+  post-HEM            N=7950  W=0.0267046  N_phys=1.032
+Cutflow 2018 signal mMed-1100_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           193898   1.0000   1.0000
+  isGood j0,j1                   193898   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       13422   0.0692   0.0692
+  post-HEM gap-jet veto           13331   0.0688   0.9932
+  post-HEM HEMVeto                12693   0.0655   0.9521
+
+--- 2018 signal mMed-1100_mDark-20_rinv-0.5 ---
+  N_pass (counts)     9532
+  W_pass (MC weight)  0.0321502
+  N_phys              1.031
+  pre-HEM             N=3567  W=0.012031  N_phys=0.2539
+  post-HEM            N=5965  W=0.0201192  N_phys=0.7774
+Cutflow 2018 signal mMed-1100_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           133064   1.0000   1.0000
+  isGood j0,j1                   133064   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       10085   0.0758   0.0758
+  post-HEM gap-jet veto            9985   0.0750   0.9901
+  post-HEM HEMVeto                 9532   0.0716   0.9546
+
+--- 2018 signal mMed-1100_mDark-20_rinv-0.7 ---
+  N_pass (counts)     4350
+  W_pass (MC weight)  0.0146356
+  N_phys              0.4694
+  pre-HEM             N=1628  W=0.0054774  N_phys=0.1156
+  post-HEM            N=2722  W=0.00915816  N_phys=0.3539
+Cutflow 2018 signal mMed-1100_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            52760   1.0000   1.0000
+  isGood j0,j1                    52760   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        4639   0.0879   0.0879
+  post-HEM gap-jet veto            4559   0.0864   0.9828
+  post-HEM HEMVeto                 4350   0.0824   0.9542
+
+--- 2018 signal mMed-1200_mDark-20_rinv-0.3 ---
+  N_pass (counts)     18270
+  W_pass (MC weight)  0.0423598
+  N_phys              1.363
+  pre-HEM             N=6725  W=0.0155922  N_phys=0.329
+  post-HEM            N=11545  W=0.0267676  N_phys=1.034
+Cutflow 2018 signal mMed-1200_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           238361   1.0000   1.0000
+  isGood j0,j1                   238361   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       19315   0.0810   0.0810
+  post-HEM gap-jet veto           19186   0.0805   0.9933
+  post-HEM HEMVeto                18270   0.0766   0.9523
+
+--- 2018 signal mMed-1200_mDark-20_rinv-0.5 ---
+  N_pass (counts)     12989
+  W_pass (MC weight)  0.0305669
+  N_phys              0.9839
+  pre-HEM             N=4778  W=0.011244  N_phys=0.2372
+  post-HEM            N=8211  W=0.0193229  N_phys=0.7466
+Cutflow 2018 signal mMed-1200_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           167170   1.0000   1.0000
+  isGood j0,j1                   167170   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       13759   0.0823   0.0823
+  post-HEM gap-jet veto           13611   0.0814   0.9892
+  post-HEM HEMVeto                12989   0.0777   0.9543
+
+--- 2018 signal mMed-1200_mDark-20_rinv-0.7 ---
+  N_pass (counts)     5946
+  W_pass (MC weight)  0.0139261
+  N_phys              0.4495
+  pre-HEM             N=2157  W=0.00505191  N_phys=0.1066
+  post-HEM            N=3789  W=0.00887421  N_phys=0.3429
+Cutflow 2018 signal mMed-1200_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            67843   1.0000   1.0000
+  isGood j0,j1                    67843   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        6284   0.0926   0.0926
+  post-HEM gap-jet veto            6178   0.0911   0.9831
+  post-HEM HEMVeto                 5946   0.0876   0.9624
+
+--- 2018 signal mMed-1300_mDark-20_rinv-0.3 ---
+  N_pass (counts)     22954
+  W_pass (MC weight)  0.0390569
+  N_phys              1.256
+  pre-HEM             N=8486  W=0.0144392  N_phys=0.3047
+  post-HEM            N=14468  W=0.0246177  N_phys=0.9512
+Cutflow 2018 signal mMed-1300_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           267011   1.0000   1.0000
+  isGood j0,j1                   267011   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       24344   0.0912   0.0912
+  post-HEM gap-jet veto           24119   0.0903   0.9908
+  post-HEM HEMVeto                22954   0.0860   0.9517
+
+--- 2018 signal mMed-1300_mDark-20_rinv-0.5 ---
+  N_pass (counts)     16450
+  W_pass (MC weight)  0.029318
+  N_phys              0.9421
+  pre-HEM             N=6103  W=0.0108771  N_phys=0.2295
+  post-HEM            N=10347  W=0.018441  N_phys=0.7126
+Cutflow 2018 signal mMed-1300_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           189170   1.0000   1.0000
+  isGood j0,j1                   189170   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       17455   0.0923   0.0923
+  post-HEM gap-jet veto           17252   0.0912   0.9884
+  post-HEM HEMVeto                16450   0.0870   0.9535
+
+--- 2018 signal mMed-1300_mDark-20_rinv-0.7 ---
+  N_pass (counts)     6945
+  W_pass (MC weight)  0.0125962
+  N_phys              0.4051
+  pre-HEM             N=2567  W=0.0046558  N_phys=0.09824
+  post-HEM            N=4378  W=0.00794043  N_phys=0.3068
+Cutflow 2018 signal mMed-1300_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            75641   1.0000   1.0000
+  isGood j0,j1                    75641   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        7351   0.0972   0.0972
+  post-HEM gap-jet veto            7245   0.0958   0.9856
+  post-HEM HEMVeto                 6945   0.0918   0.9586
+
+--- 2018 signal mMed-1400_mDark-20_rinv-0.3 ---
+  N_pass (counts)     25202
+  W_pass (MC weight)  0.0356736
+  N_phys              1.144
+  pre-HEM             N=9429  W=0.0133468  N_phys=0.2816
+  post-HEM            N=15773  W=0.0223268  N_phys=0.8627
+Cutflow 2018 signal mMed-1400_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           262778   1.0000   1.0000
+  isGood j0,j1                   262778   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       26754   0.1018   0.1018
+  post-HEM gap-jet veto           26477   0.1008   0.9896
+  post-HEM HEMVeto                25202   0.0959   0.9518
+
+--- 2018 signal mMed-1400_mDark-20_rinv-0.5 ---
+  N_pass (counts)     18156
+  W_pass (MC weight)  0.0263316
+  N_phys              0.8449
+  pre-HEM             N=6784  W=0.00983881  N_phys=0.2076
+  post-HEM            N=11372  W=0.0164928  N_phys=0.6373
+Cutflow 2018 signal mMed-1400_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           195869   1.0000   1.0000
+  isGood j0,j1                   195869   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       19307   0.0986   0.0986
+  post-HEM gap-jet veto           19030   0.0972   0.9857
+  post-HEM HEMVeto                18156   0.0927   0.9541
+
+--- 2018 signal mMed-1400_mDark-20_rinv-0.7 ---
+  N_pass (counts)     7483
+  W_pass (MC weight)  0.0115765
+  N_phys              0.3716
+  pre-HEM             N=2792  W=0.00431935  N_phys=0.09114
+  post-HEM            N=4691  W=0.00725719  N_phys=0.2804
+Cutflow 2018 signal mMed-1400_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            77321   1.0000   1.0000
+  isGood j0,j1                    77321   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        7950   0.1028   0.1028
+  post-HEM gap-jet veto            7816   0.1011   0.9831
+  post-HEM HEMVeto                 7483   0.0968   0.9574
+
+--- 2018 signal mMed-1500_mDark-20_rinv-0.3 ---
+  N_pass (counts)     30212
+  W_pass (MC weight)  0.0312028
+  N_phys              1.001
+  pre-HEM             N=11293  W=0.0116634  N_phys=0.2461
+  post-HEM            N=18919  W=0.0195395  N_phys=0.755
+Cutflow 2018 signal mMed-1500_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           288830   1.0000   1.0000
+  isGood j0,j1                   288830   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       32171   0.1114   0.1114
+  post-HEM gap-jet veto           31754   0.1099   0.9870
+  post-HEM HEMVeto                30212   0.1046   0.9514
+
+--- 2018 signal mMed-1500_mDark-20_rinv-0.5 ---
+  N_pass (counts)     23377
+  W_pass (MC weight)  0.0238861
+  N_phys              0.7651
+  pre-HEM             N=8809  W=0.00900084  N_phys=0.1899
+  post-HEM            N=14568  W=0.0148853  N_phys=0.5752
+Cutflow 2018 signal mMed-1500_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                           232677   1.0000   1.0000
+  isGood j0,j1                   232677   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2       24849   0.1068   0.1068
+  post-HEM gap-jet veto           24478   0.1052   0.9851
+  post-HEM HEMVeto                23377   0.1005   0.9550
+
+--- 2018 signal mMed-1500_mDark-20_rinv-0.7 ---
+  N_pass (counts)     6794
+  W_pass (MC weight)  0.0101462
+  N_phys              0.3237
+  pre-HEM             N=2610  W=0.00389779  N_phys=0.08224
+  post-HEM            N=4184  W=0.00624841  N_phys=0.2414
+Cutflow 2018 signal mMed-1500_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            68490   1.0000   1.0000
+  isGood j0,j1                    68490   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        7224   0.1055   0.1055
+  post-HEM gap-jet veto            7090   0.1035   0.9815
+  post-HEM HEMVeto                 6794   0.0992   0.9583
+
+--- 2018 signal mMed-500_mDark-20_rinv-0.3 ---
+  N_pass (counts)     559
+  W_pass (MC weight)  0.0199967
+  N_phys              0.6271
+  pre-HEM             N=232  W=0.00829915  N_phys=0.1751
+  post-HEM            N=327  W=0.0116975  N_phys=0.452
+Cutflow 2018 signal mMed-500_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                             5048   1.0000   1.0000
+  isGood j0,j1                     5048   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2         615   0.1218   0.1218
+  post-HEM gap-jet veto             599   0.1187   0.9740
+  post-HEM HEMVeto                  559   0.1107   0.9332
+
+--- 2018 signal mMed-500_mDark-20_rinv-0.5 ---
+  N_pass (counts)     739
+  W_pass (MC weight)  0.0264906
+  N_phys              0.8469
+  pre-HEM             N=281  W=0.0100729  N_phys=0.2125
+  post-HEM            N=458  W=0.0164177  N_phys=0.6344
+Cutflow 2018 signal mMed-500_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                             5596   1.0000   1.0000
+  isGood j0,j1                     5596   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2         794   0.1419   0.1419
+  post-HEM gap-jet veto             776   0.1387   0.9773
+  post-HEM HEMVeto                  739   0.1321   0.9523
+
+--- 2018 signal mMed-500_mDark-20_rinv-0.7 ---
+  N_pass (counts)     503
+  W_pass (MC weight)  0.0180285
+  N_phys              0.5797
+  pre-HEM             N=186  W=0.0066666  N_phys=0.1407
+  post-HEM            N=317  W=0.0113619  N_phys=0.439
+Cutflow 2018 signal mMed-500_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                             3976   1.0000   1.0000
+  isGood j0,j1                     3976   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2         552   0.1388   0.1388
+  post-HEM gap-jet veto             527   0.1325   0.9547
+  post-HEM HEMVeto                  503   0.1265   0.9545
+
+--- 2018 signal mMed-600_mDark-20_rinv-0.3 ---
+  N_pass (counts)     995
+  W_pass (MC weight)  0.023985
+  N_phys              0.7741
+  pre-HEM             N=361  W=0.00870208  N_phys=0.1836
+  post-HEM            N=634  W=0.0152829  N_phys=0.5905
+Cutflow 2018 signal mMed-600_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                             9006   1.0000   1.0000
+  isGood j0,j1                     9006   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1074   0.1193   0.1193
+  post-HEM gap-jet veto            1054   0.1170   0.9814
+  post-HEM HEMVeto                  995   0.1105   0.9440
+
+--- 2018 signal mMed-600_mDark-20_rinv-0.5 ---
+  N_pass (counts)     1064
+  W_pass (MC weight)  0.0256777
+  N_phys              0.8178
+  pre-HEM             N=412  W=0.00994287  N_phys=0.2098
+  post-HEM            N=652  W=0.0157348  N_phys=0.608
+Cutflow 2018 signal mMed-600_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                             8919   1.0000   1.0000
+  isGood j0,j1                     8919   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1146   0.1285   0.1285
+  post-HEM gap-jet veto            1118   0.1254   0.9756
+  post-HEM HEMVeto                 1064   0.1193   0.9517
+
+--- 2018 signal mMed-600_mDark-20_rinv-0.7 ---
+  N_pass (counts)     752
+  W_pass (MC weight)  0.01814
+  N_phys              0.5846
+  pre-HEM             N=275  W=0.00663363  N_phys=0.14
+  post-HEM            N=477  W=0.0115063  N_phys=0.4446
+Cutflow 2018 signal mMed-600_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                             5921   1.0000   1.0000
+  isGood j0,j1                     5921   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2         816   0.1378   0.1378
+  post-HEM gap-jet veto             793   0.1339   0.9718
+  post-HEM HEMVeto                  752   0.1270   0.9483
+
+--- 2018 signal mMed-700_mDark-20_rinv-0.3 ---
+  N_pass (counts)     1632
+  W_pass (MC weight)  0.0265066
+  N_phys              0.8527
+  pre-HEM             N=602  W=0.00977757  N_phys=0.2063
+  post-HEM            N=1030  W=0.0167291  N_phys=0.6464
+Cutflow 2018 signal mMed-700_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                            23632   1.0000   1.0000
+  isGood j0,j1                    23632   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1750   0.0741   0.0741
+  post-HEM gap-jet veto            1723   0.0729   0.9846
+  post-HEM HEMVeto                 1632   0.0691   0.9472
+
+--- 2018 signal mMed-700_mDark-20_rinv-0.5 ---
+  N_pass (counts)     1533
+  W_pass (MC weight)  0.0249778
+  N_phys              0.8085
+  pre-HEM             N=548  W=0.00892879  N_phys=0.1884
+  post-HEM            N=985  W=0.016049  N_phys=0.6201
+Cutflow 2018 signal mMed-700_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                            18707   1.0000   1.0000
+  isGood j0,j1                    18707   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1657   0.0886   0.0886
+  post-HEM gap-jet veto            1617   0.0864   0.9759
+  post-HEM HEMVeto                 1533   0.0819   0.9481
+
+--- 2018 signal mMed-700_mDark-20_rinv-0.7 ---
+  N_pass (counts)     1083
+  W_pass (MC weight)  0.0175862
+  N_phys              0.5625
+  pre-HEM             N=411  W=0.006674  N_phys=0.1408
+  post-HEM            N=672  W=0.0109122  N_phys=0.4216
+Cutflow 2018 signal mMed-700_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                             9757   1.0000   1.0000
+  isGood j0,j1                     9757   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1158   0.1187   0.1187
+  post-HEM gap-jet veto            1134   0.1162   0.9793
+  post-HEM HEMVeto                 1083   0.1110   0.9550
+
+--- 2018 signal mMed-800_mDark-20_rinv-0.3 ---
+  N_pass (counts)     2729
+  W_pass (MC weight)  0.0299034
+  N_phys              0.9471
+  pre-HEM             N=1084  W=0.0118781  N_phys=0.2506
+  post-HEM            N=1645  W=0.0180253  N_phys=0.6965
+Cutflow 2018 signal mMed-800_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                            56436   1.0000   1.0000
+  isGood j0,j1                    56436   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        2894   0.0513   0.0513
+  post-HEM gap-jet veto            2867   0.0508   0.9907
+  post-HEM HEMVeto                 2729   0.0484   0.9519
+
+--- 2018 signal mMed-800_mDark-20_rinv-0.5 ---
+  N_pass (counts)     2309
+  W_pass (MC weight)  0.0253089
+  N_phys              0.8113
+  pre-HEM             N=867  W=0.00950317  N_phys=0.2005
+  post-HEM            N=1442  W=0.0158057  N_phys=0.6107
+Cutflow 2018 signal mMed-800_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                            38062   1.0000   1.0000
+  isGood j0,j1                    38062   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        2468   0.0648   0.0648
+  post-HEM gap-jet veto            2430   0.0638   0.9846
+  post-HEM HEMVeto                 2309   0.0607   0.9502
+
+--- 2018 signal mMed-800_mDark-20_rinv-0.7 ---
+  N_pass (counts)     1490
+  W_pass (MC weight)  0.0163873
+  N_phys              0.5265
+  pre-HEM             N=553  W=0.00608201  N_phys=0.1283
+  post-HEM            N=937  W=0.0103053  N_phys=0.3982
+Cutflow 2018 signal mMed-800_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            16642   1.0000   1.0000
+  isGood j0,j1                    16642   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        1596   0.0959   0.0959
+  post-HEM gap-jet veto            1561   0.0938   0.9781
+  post-HEM HEMVeto                 1490   0.0895   0.9545
+
+--- 2018 signal mMed-900_mDark-20_rinv-0.3 ---
+  N_pass (counts)     4868
+  W_pass (MC weight)  0.0359075
+  N_phys              1.147
+  pre-HEM             N=1855  W=0.0136829  N_phys=0.2887
+  post-HEM            N=3013  W=0.0222246  N_phys=0.8588
+Cutflow 2018 signal mMed-900_mDark-20_rinv-0.3 cutflow
+                                 events     abs.     rel.
+  skim                           101179   1.0000   1.0000
+  isGood j0,j1                   101179   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        5144   0.0508   0.0508
+  post-HEM gap-jet veto            5110   0.0505   0.9934
+  post-HEM HEMVeto                 4868   0.0481   0.9526
+
+--- 2018 signal mMed-900_mDark-20_rinv-0.5 ---
+  N_pass (counts)     3918
+  W_pass (MC weight)  0.0288884
+  N_phys              0.919
+  pre-HEM             N=1525  W=0.0112442  N_phys=0.2373
+  post-HEM            N=2393  W=0.0176442  N_phys=0.6818
+Cutflow 2018 signal mMed-900_mDark-20_rinv-0.5 cutflow
+                                 events     abs.     rel.
+  skim                            66371   1.0000   1.0000
+  isGood j0,j1                    66371   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        4200   0.0633   0.0633
+  post-HEM gap-jet veto            4115   0.0620   0.9798
+  post-HEM HEMVeto                 3918   0.0590   0.9521
+
+--- 2018 signal mMed-900_mDark-20_rinv-0.7 ---
+  N_pass (counts)     2247
+  W_pass (MC weight)  0.0165645
+  N_phys              0.5251
+  pre-HEM             N=889  W=0.00655354  N_phys=0.1383
+  post-HEM            N=1358  W=0.0100109  N_phys=0.3868
+Cutflow 2018 signal mMed-900_mDark-20_rinv-0.7 cutflow
+                                 events     abs.     rel.
+  skim                            26865   1.0000   1.0000
+  isGood j0,j1                    26865   1.0000   1.0000
+  1.5 < |dEta(j0,j1)| < 2.2        2390   0.0890   0.0890
+  post-HEM gap-jet veto            2342   0.0872   0.9799
+  post-HEM HEMVeto                 2247   0.0836   0.9594
+
+=== 2018 signal contamination (final GAE selection) ===
+signal point                           N_pass     N_phys  unwt/data  phys/data   phys/QCD
+s-channel_mMed-1000_mDark-20_rinv-0.3     8360      1.332     0.953%     0.000%     0.245%
+s-channel_mMed-1000_mDark-20_rinv-0.5     6304      1.009     0.719%     0.000%     0.186%
+s-channel_mMed-1000_mDark-20_rinv-0.7     3013      0.483     0.344%     0.000%     0.089%
+s-channel_mMed-1100_mDark-20_rinv-0.3    12693      1.368     1.448%     0.000%     0.252%
+s-channel_mMed-1100_mDark-20_rinv-0.5     9532      1.031     1.087%     0.000%     0.190%
+s-channel_mMed-1100_mDark-20_rinv-0.7     4350     0.4694     0.496%     0.000%     0.086%
+s-channel_mMed-1200_mDark-20_rinv-0.3    18270      1.363     2.084%     0.000%     0.251%
+s-channel_mMed-1200_mDark-20_rinv-0.5    12989     0.9839     1.481%     0.000%     0.181%
+s-channel_mMed-1200_mDark-20_rinv-0.7     5946     0.4495     0.678%     0.000%     0.083%
+s-channel_mMed-1300_mDark-20_rinv-0.3    22954      1.256     2.618%     0.000%     0.231%
+s-channel_mMed-1300_mDark-20_rinv-0.5    16450     0.9421     1.876%     0.000%     0.173%
+s-channel_mMed-1300_mDark-20_rinv-0.7     6945     0.4051     0.792%     0.000%     0.075%
+s-channel_mMed-1400_mDark-20_rinv-0.3    25202      1.144     2.874%     0.000%     0.211%
+s-channel_mMed-1400_mDark-20_rinv-0.5    18156     0.8449     2.071%     0.000%     0.155%
+s-channel_mMed-1400_mDark-20_rinv-0.7     7483     0.3716     0.853%     0.000%     0.068%
+s-channel_mMed-1500_mDark-20_rinv-0.3    30212      1.001     3.446%     0.000%     0.184%
+s-channel_mMed-1500_mDark-20_rinv-0.5    23377     0.7651     2.666%     0.000%     0.141%
+s-channel_mMed-1500_mDark-20_rinv-0.7     6794     0.3237     0.775%     0.000%     0.060%
+s-channel_mMed-500_mDark-20_rinv-0.3      559     0.6271     0.064%     0.000%     0.115%
+s-channel_mMed-500_mDark-20_rinv-0.5      739     0.8469     0.084%     0.000%     0.156%
+s-channel_mMed-500_mDark-20_rinv-0.7      503     0.5797     0.057%     0.000%     0.107%
+s-channel_mMed-600_mDark-20_rinv-0.3      995     0.7741     0.113%     0.000%     0.142%
+s-channel_mMed-600_mDark-20_rinv-0.5     1064     0.8178     0.121%     0.000%     0.150%
+s-channel_mMed-600_mDark-20_rinv-0.7      752     0.5846     0.086%     0.000%     0.108%
+s-channel_mMed-700_mDark-20_rinv-0.3     1632     0.8527     0.186%     0.000%     0.157%
+s-channel_mMed-700_mDark-20_rinv-0.5     1533     0.8085     0.175%     0.000%     0.149%
+s-channel_mMed-700_mDark-20_rinv-0.7     1083     0.5625     0.124%     0.000%     0.103%
+s-channel_mMed-800_mDark-20_rinv-0.3     2729     0.9471     0.311%     0.000%     0.174%
+s-channel_mMed-800_mDark-20_rinv-0.5     2309     0.8113     0.263%     0.000%     0.149%
+s-channel_mMed-800_mDark-20_rinv-0.7     1490     0.5265     0.170%     0.000%     0.097%
+s-channel_mMed-900_mDark-20_rinv-0.3     4868      1.147     0.555%     0.000%     0.211%
+s-channel_mMed-900_mDark-20_rinv-0.5     3918      0.919     0.447%     0.000%     0.169%
+s-channel_mMed-900_mDark-20_rinv-0.7     2247     0.5251     0.256%     0.000%     0.097%

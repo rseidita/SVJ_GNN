@@ -8,7 +8,7 @@ Before submitting, make the job tarball and fill in the TODO fields below:
 
     cd SVJ_GNN
     tar -czf crab/SVJ_GNN.tar.gz --exclude .git --exclude data \
-        --exclude scores --exclude plots --exclude training \
+        --exclude scores --exclude output_scores --exclude plots --exclude training \
         --exclude .venv-gae --exclude '*.root' -C .. SVJ_GNN
     crab submit -c crab/crabConfig_gae.py
 
@@ -24,20 +24,17 @@ from CRABClient.UserUtilities import config
 SVJ_GNN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, SVJ_GNN_DIR)
 
-from utils.FileLists import read_file_list  # noqa: E402
 from utils.GaeConfig import load_config  # noqa: E402
 
 
 # Which sample and stage this submission processes.
-GAE_SAMPLE = "background_example"
+GAE_SAMPLE = "background_2018"
 GAE_STAGE = "score"
 GAE_ARGUMENTS = "--checkpoint checkpoint.pt"
 
 pipeline = load_config(os.path.join(SVJ_GNN_DIR, "gae_config.json"))
 sample = pipeline.sample(GAE_SAMPLE)
-input_files = read_file_list(
-    os.path.join(SVJ_GNN_DIR, sample.file_list)
-)
+input_files = sample.files()
 
 config = config()
 
@@ -71,9 +68,7 @@ config.Data.totalUnits = len(input_files)
 config.Data.publication = False
 config.Data.outputPrimaryDataset = "SVJGAE"
 config.Data.outputDatasetTag = f"gae_{GAE_STAGE}_{GAE_SAMPLE}"
-# TODO: set to your own EOS area.
-config.Data.outLFNDirBase = "/store/user/USERNAME/SVJGAE"
+username = os.environ.get("USER", "nparmar")
+config.Data.outLFNDirBase = f"/store/user/{username}/SVJScouting/SVJGAE"
 
-config.Site.storageSite = "T3_US_FNALLPC"
-# TODO: restrict or widen as needed; the job only needs xrootd access.
-config.Site.whitelist = ["T3_US_FNALLPC"]
+config.Site.storageSite = "T2_CH_CERN"

@@ -37,27 +37,69 @@
   "samples": {
     "smoke": {
       "role": "data",
-      "file_list": "filelists/smoke_part14.txt",
+      "year": "2018",
+      "input_json": "inputJson/smoke/2018_data.json",
       "weights": null,
       "label": 0
     },
-    "background_example": {
+    "data_2017": {
+      "role": "data",
+      "year": "2017",
+      "input_json": "inputJson/data/2017_data.json",
+      "weights": null,
+      "label": 0
+    },
+    "data_2018": {
+      "role": "data",
+      "year": "2018",
+      "input_json": "inputJson/data/2018_data.json",
+      "weights": null,
+      "label": 0
+    },
+    "background_2017": {
       "role": "background",
-      "file_list": "filelists/background_example.txt",
+      "year": "2017",
+      "input_json": "inputJson/background/2017_background.json",
       "weights": "xsec",
       "label": 0
     },
-    "signal_example": {
+    "background_2018": {
+      "role": "background",
+      "year": "2018",
+      "input_json": "inputJson/background/2018_background.json",
+      "weights": "xsec",
+      "label": 0
+    },
+    "qcd_2018": {
+      "role": "background",
+      "year": "2018",
+      "input_json": "inputJson/background/2018_background.json",
+      "datasets": [
+        "QCD_HT300to500",
+        "QCD_HT500to700",
+        "QCD_HT700to1000",
+        "QCD_HT1000to1500",
+        "QCD_HT1500to2000",
+        "QCD_HT2000toInf"
+      ],
+      "weights": "xsec",
+      "label": 0
+    },
+    "signal_2017": {
       "role": "signal",
-      "file_list": "filelists/signal_example.txt",
+      "year": "2017",
+      "input_json": "inputJson/signal/2017_signal.json",
+      "per_dataset": true,
       "weights": "xsec",
       "label": 1
     },
-    "data_example": {
-      "role": "data",
-      "file_list": "filelists/data_example.txt",
-      "weights": null,
-      "label": 0
+    "signal_2018": {
+      "role": "signal",
+      "year": "2018",
+      "input_json": "inputJson/signal/2018_signal.json",
+      "per_dataset": true,
+      "weights": "xsec",
+      "label": 1
     }
   }
 }

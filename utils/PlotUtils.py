@@ -302,6 +302,20 @@ def plot_loss_efficiency(
     _save(figure, file_name, formats, show)
 
 
+def _signal_curves(scores_signal, weights_signal):
+    """``[(label, scores, weights)]`` from one signal or a dict of signals.
+
+    A dict maps a label to ``(scores, weights)`` and draws one curve per
+    signal point; a plain array draws a single unlabelled curve.
+    """
+    if isinstance(scores_signal, dict):
+        return [
+            (label, scores, weights)
+            for label, (scores, weights) in scores_signal.items()
+        ]
+    return [(None, scores_signal, weights_signal)]
+
+
 def plot_roc(
     scores_signal,
     scores_background,
@@ -311,24 +325,33 @@ def plot_roc(
     formats=("pdf",),
     show=False,
 ):
-    """Signal against background efficiency, with the area under the curve."""
-    set_cms_style()
-    fpr, tpr, _ = roc_curve(
-        scores_signal,
-        scores_background,
-        weights_signal,
-        weights_background,
-    )
+    """Signal against background efficiency, with the area under the curve.
 
+    ``scores_signal`` may be a ``{label: (scores, weights)}`` dict to overlay
+    one curve per signal point against the same background.
+    """
+    set_cms_style()
     figure, axes = plt.subplots(figsize=(10, 8))
-    axes.plot(fpr, tpr, linewidth=2, label=f"AUC = {auc(fpr, tpr):.3f}")
+    curves = {}
+    for label, scores, weights in _signal_curves(scores_signal, weights_signal):
+        fpr, tpr, _ = roc_curve(
+            scores, scores_background, weights, weights_background
+        )
+        curves[label] = (fpr, tpr)
+        text = f"AUC = {auc(fpr, tpr):.3f}"
+        axes.plot(
+            fpr, tpr, linewidth=2,
+            label=text if label is None else f"{label} ({text})",
+        )
     axes.plot([0, 1], [0, 1], linestyle="--", color="grey", linewidth=1)
     axes.set_xlabel("Background efficiency")
     axes.set_ylabel("Signal efficiency")
-    axes.legend()
+    axes.legend(fontsize="small")
     cms_label(axes)
     _save(figure, file_name, formats, show)
-    return fpr, tpr
+    if len(curves) == 1:
+        return next(iter(curves.values()))
+    return curves
 
 
 def plot_sic_vs_fpr(
@@ -341,28 +364,28 @@ def plot_sic_vs_fpr(
     formats=("pdf",),
     show=False,
 ):
-    """Significance improvement against background efficiency."""
-    set_cms_style()
-    fpr, tpr, _ = roc_curve(
-        scores_signal,
-        scores_background,
-        weights_signal,
-        weights_background,
-    )
-    fpr_values, sic_values = sic(tpr, fpr, min_fpr=min_fpr)
+    """Significance improvement against background efficiency.
 
+    Accepts the same single-signal or ``{label: (scores, weights)}`` inputs as
+    :func:`plot_roc`.
+    """
+    set_cms_style()
     figure, axes = plt.subplots(figsize=(10, 8))
-    axes.plot(
-        fpr_values,
-        sic_values,
-        linewidth=2,
-        label=f"max SIC = {max_sic(tpr, fpr, min_fpr=min_fpr):.2f}",
-    )
+    for label, scores, weights in _signal_curves(scores_signal, weights_signal):
+        fpr, tpr, _ = roc_curve(
+            scores, scores_background, weights, weights_background
+        )
+        fpr_values, sic_values = sic(tpr, fpr, min_fpr=min_fpr)
+        text = f"max SIC = {max_sic(tpr, fpr, min_fpr=min_fpr):.2f}"
+        axes.plot(
+            fpr_values, sic_values, linewidth=2,
+            label=text if label is None else f"{label} ({text})",
+        )
     axes.axhline(1.0, linestyle="--", color="grey", linewidth=1)
     axes.set_xscale("log")
     axes.set_xlabel("Background efficiency")
     axes.set_ylabel(r"$\varepsilon_S/\sqrt{\varepsilon_B}$")
-    axes.legend()
+    axes.legend(fontsize="small")
     cms_label(axes)
     _save(figure, file_name, formats, show)
 

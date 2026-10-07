@@ -24,34 +24,47 @@ class encoder(torch.nn.Module):
         return self.layers[-1](x, edge_index)
 
 class features_decoder(torch.nn.Module):
-    def __init__(self, num_features, architecture):
+    def __init__(self, num_features, architecture, symmetric=True):
         super(features_decoder, self).__init__()
-        self.decoder = GCNConv(architecture[-1], num_features, improved=True)
+        self.layers = torch.nn.ModuleList()
+        if symmetric and len(architecture) > 1:
+            dims = [architecture[-1]] + list(reversed(architecture[:-1])) + [num_features]
+            for in_dim, out_dim in zip(dims[:-1], dims[1:]):
+                self.layers.append(GCNConv(in_dim, out_dim, improved=True))
+        else:
+            self.layers.append(GCNConv(architecture[-1], num_features, improved=True))
         
     def forward(self, z, edge_index):
-        return self.decoder(z, edge_index)
+        for layer in self.layers[:-1]:
+            z = layer(z, edge_index).relu()
+        return self.layers[-1](z, edge_index)
     
 class graphAE(torch.nn.Module):
-    def __init__(self, num_features, architecture):
+    def __init__(self, num_features, architecture, symmetric_decoder=True):
         super(graphAE, self).__init__()
         self.encoder = encoder(num_features, architecture)
         self.edges_decoder = InnerProductDecoder()
-        self.features_decoder = features_decoder(num_features, architecture)
+        self.features_decoder = features_decoder(
+            num_features, architecture, symmetric=symmetric_decoder
+        )
+        self.architecture = tuple(architecture)
         
-    def edges_loss(self, x, edge_index, negative_edge_index, weight=None):
-        
-        z = self.encoder(x, edge_index)
+    def edges_loss(self, x, edge_index, negative_edge_index, weight=None, z=None):
+        if z is None:
+            z = self.encoder(x, edge_index)
         
         if weight is None:
-            # weight = torch.ones(edge_index.shape[1]).to(x.device)
-            weight = 1.
+            weight = 1.0
 
-        pos_loss = (-torch.log(
-                self.edges_decoder(z, edge_index, sigmoid=True) + EPS
-                )*weight
-            ).mean()
-        neg_loss = 0.0
-        if self.training:
+        if edge_index.shape[1] == 0:
+            pos_loss = torch.tensor(0.0, device=x.device, requires_grad=True)
+        else:
+            pos_loss = (-torch.log(
+                    self.edges_decoder(z, edge_index, sigmoid=True) + EPS
+                    )*weight
+                ).mean()
+        neg_loss = torch.tensor(0.0, device=x.device)
+        if self.training and negative_edge_index is not None and negative_edge_index.shape[1] > 0:
             neg_loss = (
                 -torch.log(
                     1 - self.edges_decoder(z, negative_edge_index, sigmoid=True) + EPS
@@ -60,11 +73,19 @@ class graphAE(torch.nn.Module):
         
         return (pos_loss + neg_loss)
     
-    def features_loss(self, x, edge_index, weight=None):
-
-        z = self.encoder(x, edge_index)
+    def features_loss(self, x, edge_index, weight=None, z=None):
+        if z is None:
+            z = self.encoder(x, edge_index)
         x_reco = self.features_decoder(z, edge_index)
         return (weighted_MSELoss()(x, x_reco, weight)) if weight is not None else torch.nn.MSELoss()(x, x_reco)
+
+    def training_loss(self, batch, alpha=1.0):
+        from torch_geometric.utils import batched_negative_sampling
+        z = self.encoder(batch.x, batch.edge_index)
+        negative_edges = batched_negative_sampling(batch.edge_index, batch.batch)
+        edges = self.edges_loss(batch.x, batch.edge_index, negative_edges, z=z)
+        features = self.features_loss(batch.x, batch.edge_index, z=z)
+        return edges + alpha * features, edges, features
 
     def score_batch(self, x, edge_index, batch, alpha=1.0):
         """Return total, edge, and feature reconstruction scores per graph.

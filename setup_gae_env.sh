@@ -24,3 +24,5 @@ fi
 
 # Scripts import as "utils.X" / "architectures.X", so run from this directory.
 export PYTHONPATH="${GAE_DIR}:${PYTHONPATH}"
+export COMET_API_KEY="8pkRGAjV7ZfkZfIKjdQQPCQuT"
+

@@ -27,30 +27,26 @@ cp ../SVJ_GNN_PSet.py PSet.py
 
 source setup_gae_env.sh
 
-# Replace the sample's file list with the files CRAB gave this job, so the
-# rest of the pipeline is unchanged.
-python - <<'PYTHON'
-import os
-
+# The files CRAB gave this job are passed with --files; the sample's input
+# JSON stays intact so cross section weights still see the whole dataset.
+JOB_FILES=$(python - <<'PYTHON'
 import PSet
 
-from utils.GaeConfig import load_config
-from utils.FileLists import write_file_list
-
-sample = load_config("gae_config.json").sample(os.environ["GAE_SAMPLE"])
-file_names = [str(name) for name in PSet.process.source.fileNames]
-write_file_list(file_names, sample.file_list)
-print(f"Wrote {sample.file_list} with {len(file_names)} file(s)")
+print(" ".join(str(name) for name in PSet.process.source.fileNames))
 PYTHON
+)
+echo "Job files: ${JOB_FILES}"
 
 case ${GAE_STAGE} in
     produce)
-        python produce_graphs.py --samples "${GAE_SAMPLE}" ${GAE_ARGUMENTS}
+        python produce_graphs.py --samples "${GAE_SAMPLE}" \
+            --files ${JOB_FILES} ${GAE_ARGUMENTS}
         OUTPUTS="data"
         ;;
     score)
-        python score_gae.py --samples "${GAE_SAMPLE}" ${GAE_ARGUMENTS}
-        OUTPUTS="scores"
+        python score_gae.py --samples "${GAE_SAMPLE}" \
+            --files ${JOB_FILES} ${GAE_ARGUMENTS}
+        OUTPUTS="output_scores"
         ;;
     *)
         echo "Unknown GAE_STAGE '${GAE_STAGE}'; expected produce or score"

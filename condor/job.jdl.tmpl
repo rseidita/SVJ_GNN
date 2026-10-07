@@ -1,0 +1,20 @@
+Universe                = vanilla
+Executable              = CONDOR_DIR/run_job.sh
+Should_Transfer_Files   = YES
+WhenToTransferOutput    = ON_EXIT
+Transfer_Input_Files    = TARBALL
+x509userproxy           = X509_PROXY
+
+Output                  = LOG_DIR/$(STAGE)_$(SAMPLE)_$(SHARD).stdout
+Error                   = LOG_DIR/$(STAGE)_$(SAMPLE)_$(SHARD).stderr
+Log                     = LOG_DIR/$(STAGE)_$(SAMPLE)_$(SHARD).log
+
+request_cpus            = REQUEST_CPUS
+request_memory          = REQUEST_MEMORY
+request_disk            = REQUEST_DISK
+GPU_REQUIREMENT
+
+Arguments               = $(STAGE) $(SAMPLE) $(SHARD) JOB_ARGUMENTS
+Queue STAGE, SAMPLE, SHARD from (
+QUEUE_ITEMS
+)

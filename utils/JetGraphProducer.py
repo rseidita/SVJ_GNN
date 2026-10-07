@@ -16,12 +16,12 @@ from utils.GraphBuilder import (
     pfnano_branches,
 )
 from utils.Cuts import (
-    CUT_BRANCHES,
+    cut_branches,
     cuts_fingerprint,
     event_cut_mask,
     jet_cut_mask,
 )
-from utils.FileLists import resolve_file_list
+from utils.InputJson import dataset_of, sum_initial_events
 
 
 _GRAPH_WORKER_PRODUCER = None
@@ -160,7 +160,10 @@ class JetGraphProducer(Dataset):
         chunk_size=None,
         processing_batch_size=None,
         worker_prefetch=2,
+        multiprocessing_start_method=None,
     ):
+
+        self.multiprocessing_start_method = multiprocessing_start_method
 
         self.root = root
         self.n_store_jets = n_store_jets
@@ -765,13 +768,13 @@ class JetGraphProducer(Dataset):
         if self.num_workers == 1:
             _consume_files()
         else:
-            # ``fork`` avoids requiring user scripts to be guarded by
-            # ``if __name__ == "__main__"`` and shares imported/JIT state
-            # copy-on-write. Fall back to the platform default where absent.
-            start_methods = multiprocessing.get_all_start_methods()
-            context = multiprocessing.get_context(
-                "fork" if "fork" in start_methods else None
-            )
+            method = self.multiprocessing_start_method
+            if method is None:
+                # Do not fork after PyTorch/ROOT has initialized threads.
+                # Forking in a multi-threaded process causes deadlocks.
+                start_methods = multiprocessing.get_all_start_methods()
+                method = "spawn" if "spawn" in start_methods else None
+            context = multiprocessing.get_context(method)
             with concurrent.futures.ProcessPoolExecutor(
                 max_workers=self.num_workers,
                 mp_context=context,
@@ -805,26 +808,34 @@ class JetGraphProducer(Dataset):
 
 
 class FileListGraphProducer(JetGraphProducer):
-    """Produce graphs from ROOT files named in a text file list.
+    """Produce graphs from an explicit list of ROOT files, with selections.
 
-    Differs from :class:`JetGraphProducer` in two ways only:
+    Differs from :class:`JetGraphProducer` in three ways:
 
-    - the input files come from a text list (or an explicit list of paths),
-      instead of every ``.root`` file inside ``root``. ``root`` is therefore
-      only the output location of the ``processed/`` directory, which makes it
-      straightforward to give each condor or crab shard its own output area;
-    - the selections in :mod:`utils.Cuts` are applied to every event and jet,
-      identically for signal, background and data.
+    - the input files are given explicitly (typically read from the JSON in
+      ``inputJson/``) instead of every ``.root`` file inside ``root``.
+      ``root`` is therefore only the output location of the ``processed/``
+      directory, which makes it straightforward to give each condor or crab
+      shard its own output area;
+    - the selections in :mod:`utils.Cuts` are applied to every event and jet
+      according to the sample's ``role`` and ``year``;
+    - with ``weights="xsec"`` the number of generated events is summed over
+      the files of the dataset a file belongs to (``dataset_groups``), not
+      over every input file, so several datasets can share one sample. The
+      sums are cached so each file is opened once for this purpose.
 
     ``save_jet_idx`` is forced on because the jet index is needed to evaluate
-    the per-jet selection, and ``CUT_BRANCHES`` are appended to
+    the per-jet selection, and the cut branches are appended to
     ``extra_obs_to_load`` so the cut variables are read from the file.
 
     Args:
         root (str): Output directory for the processed dataset.
         output_dataset_name (str): Name of the processed output dataset.
-        file_list (str): Path to a text file with one ROOT path per line.
-        file_paths (list): Explicit ROOT paths, used instead of ``file_list``.
+        file_paths (list): ROOT paths to process.
+        role (str): ``"signal"``, ``"background"`` or ``"data"``.
+        year (str): Data-taking year the sample corresponds to.
+        dataset_groups (dict): ``{dataset: [files]}`` covering
+            ``file_paths``. Defaults to a single group holding every file.
 
     All remaining arguments are passed through to :class:`JetGraphProducer`.
     """
@@ -833,26 +844,32 @@ class FileListGraphProducer(JetGraphProducer):
         self,
         root,
         output_dataset_name,
-        file_list=None,
-        file_paths=None,
+        file_paths,
+        role,
+        year,
+        dataset_groups=None,
         **kwargs,
     ):
-        if (file_list is None) == (file_paths is None):
-            raise ValueError(
-                "Provide exactly one of file_list or file_paths"
-            )
-        if file_paths is None:
-            file_paths = resolve_file_list(file_list)
         self._file_paths = [str(path) for path in file_paths]
         if not self._file_paths:
             raise ValueError("No input ROOT files were provided")
-        self.file_list = file_list
+        self.role = role
+        self.year = str(year)
+        self.region = kwargs.pop("region", "control")
+        if dataset_groups is None:
+            dataset_groups = {output_dataset_name: list(self._file_paths)}
+        self.dataset_groups = {
+            name: [str(path) for path in files]
+            for name, files in dataset_groups.items()
+        }
+        self._initial_events_cache = {}
+        self._current_file = None
 
         # The jet index identifies which jet a graph came from, which the
         # per-jet selection needs.
         kwargs["save_jet_idx"] = True
         extra_obs_to_load = list(kwargs.pop("extra_obs_to_load", None) or [])
-        for branch in CUT_BRANCHES:
+        for branch in cut_branches(self.role, self.year, region=self.region):
             if branch not in extra_obs_to_load:
                 extra_obs_to_load.append(branch)
         kwargs["extra_obs_to_load"] = extra_obs_to_load
@@ -866,12 +883,38 @@ class FileListGraphProducer(JetGraphProducer):
 
     def _processing_config(self):
         config = super()._processing_config()
+        config["role"] = self.role
+        config["year"] = self.year
+        config["region"] = self.region
         config["cuts_fingerprint"] = cuts_fingerprint()
-        config["cut_branches"] = sorted(CUT_BRANCHES)
+        config["cut_branches"] = sorted(
+            cut_branches(self.role, self.year, region=self.region)
+        )
         config["input_files_sha256"] = hashlib.sha256(
             "\n".join(self._file_paths).encode()
         ).hexdigest()
         return config
+
+    def get_graphs(self, file_name):
+        self._current_file = str(file_name)
+        return super().get_graphs(file_name)
+
+    def _iter_graphs_from_file(self, file_name, executor=None):
+        # Remember which file is being read so get_total_initial_events can
+        # look up the dataset it belongs to.
+        self._current_file = str(file_name)
+        yield from super()._iter_graphs_from_file(file_name, executor)
+
+    def get_total_initial_events(self):
+        """Generated events of the dataset the current file belongs to."""
+        dataset = dataset_of(self._current_file, self.dataset_groups)
+        if dataset not in self._initial_events_cache:
+            if self.verbose:
+                print(f"Summing initial events for dataset '{dataset}'")
+            self._initial_events_cache[dataset] = sum_initial_events(
+                self.dataset_groups[dataset]
+            )
+        return self._initial_events_cache[dataset]
 
     def process_event(
         self,
@@ -886,7 +929,12 @@ class FileListGraphProducer(JetGraphProducer):
     ):
         """Apply the shared selections, then build graphs for what survives."""
         events_in_range = events[i_start:i_stop]
-        mask = np.asarray(event_cut_mask(events_in_range), dtype=bool)
+        mask = np.asarray(
+            event_cut_mask(
+                events_in_range, self.role, self.year, region=self.region
+            ),
+            dtype=bool,
+        )
         if mask.shape != (len(events_in_range),):
             raise ValueError(
                 "event_cut_mask must return one boolean per event, got shape "
