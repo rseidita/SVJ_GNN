@@ -167,45 +167,51 @@ class PipelineConfig:
         kwargs["label"] = label
         return GraphBuildConfig(**kwargs)
 
-    def dataset_root(self, sample, base_dir=None):
+    def dataset_root(self, sample, base_dir=None, require_exists=False):
         """Output directory holding the processed graphs of *sample*."""
         prod_dir = self.production.get("output_dir", "data")
+        candidates = []
         base = base_dir or os.environ.get("GAE_DATA_DIR")
         if base:
-            for cand in (
-                os.path.join(base, prod_dir, sample.name),
-                os.path.join(base, "data", sample.name),
-                os.path.join(base, "data_aimar", sample.name),
-                os.path.join(base, sample.name),
-            ):
-                if os.path.isdir(os.path.join(cand, "processed")):
-                    return cand
-            return os.path.join(base, prod_dir, sample.name)
+            norm_base = os.path.normpath(base)
+            base_leaf = os.path.basename(norm_base)
+            if base_leaf in ("data", "data_aimar") and base_leaf != prod_dir:
+                raise ValueError(
+                    f"Data folder mismatch: base_dir '{base}' ends with '{base_leaf}', "
+                    f"but pipeline config specifies production directory '{prod_dir}'. "
+                    f"Please specify the matching data folder or adjust the config."
+                )
+            if base_leaf == prod_dir:
+                candidates.append(os.path.join(base, sample.name))
+            else:
+                candidates.append(os.path.join(base, prod_dir, sample.name))
 
-        local_cand = os.path.join(prod_dir, sample.name)
-        if os.path.isdir(os.path.join(local_cand, "processed")):
-            return local_cand
+        candidates.append(os.path.join(prod_dir, sample.name))
 
-        eos_base = os.environ.get("GAE_DATA_DIR") or os.environ.get("GAE_OUTPUT_EOS")
+        eos_base = os.environ.get("GAE_OUTPUT_EOS") or "/eos/user/n/nparmar/SVJScouting"
         if eos_base and os.path.isdir(eos_base):
-            for sub in (prod_dir, "data", "data_aimar"):
-                cand = os.path.join(eos_base, sub, sample.name)
-                if os.path.isdir(os.path.join(cand, "processed")):
-                    return cand
-            cand = os.path.join(eos_base, sample.name)
+            norm_eos = os.path.normpath(eos_base)
+            cand = os.path.join(eos_base, sample.name) if os.path.basename(norm_eos) == prod_dir else os.path.join(eos_base, prod_dir, sample.name)
+            if cand not in candidates:
+                candidates.append(cand)
+
+        for cand in candidates:
             if os.path.isdir(os.path.join(cand, "processed")):
                 return cand
 
-        for sub in ("data", "data_aimar"):
-            cand = os.path.join(sub, sample.name)
-            if os.path.isdir(os.path.join(cand, "processed")):
-                return cand
+        if require_exists:
+            checked = ", ".join(f"'{c}'" for c in candidates)
+            raise FileNotFoundError(
+                f"Dataset for sample '{sample.name}' was not found in configured production directory '{prod_dir}'. "
+                f"Checked locations: {checked}. "
+                f"Automatic fallback across different data folders is disabled to prevent using incorrect datasets."
+            )
 
-        return local_cand
+        return candidates[0]
 
-    def all_dataset_paths(self, sample, base_dir=None):
+    def all_dataset_paths(self, sample, base_dir=None, require_exists=True):
         """List of ``[root, dataset_name]`` pairs for *sample*, expanding all shards if present."""
-        root = self.dataset_root(sample, base_dir=base_dir)
+        root = self.dataset_root(sample, base_dir=base_dir, require_exists=require_exists)
         processed_dir = os.path.join(root, "processed")
         base_name = sample.dataset_name
 
@@ -217,6 +223,16 @@ class PipelineConfig:
                 return int(m.group(1)) if m else 0
             shard_meta_files.sort(key=shard_key)
             return [[root, os.path.basename(smf)[:-8]] for smf in shard_meta_files]
+
+        if require_exists:
+            meta_file = os.path.join(processed_dir, f"{base_name}_meta.pt")
+            chunk_files = glob.glob(os.path.join(processed_dir, f"{base_name}_chunk_*.pt"))
+            if not os.path.exists(meta_file) and not chunk_files:
+                prod_dir = self.production.get("output_dir", "data")
+                raise FileNotFoundError(
+                    f"No processed graph files found for sample '{sample.name}' in '{processed_dir}'. "
+                    f"Expected '{base_name}_meta.pt' or '{base_name}_chunk_*.pt' in production directory '{prod_dir}'."
+                )
 
         return [[root, base_name]]
 

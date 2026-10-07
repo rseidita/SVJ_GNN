@@ -262,7 +262,7 @@ class JetGraphProducer(Dataset):
         # Load lightweight metadata from disk (weights, jet indices, total count).
         # No graph tensors are loaded here — those are fetched on-demand in get().
         meta_path = os.path.join(self.processed_dir, f"{self.output_dataset_name}_meta.pt")
-        meta = torch.load(meta_path, weights_only=False)
+        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
         if self.validate_cache_config:
             self._validate_processing_config(meta, meta_path)
         # The on-disk layout must always come from metadata. This is
@@ -713,7 +713,7 @@ class JetGraphProducer(Dataset):
                 self.processed_dir,
                 f"{self.output_dataset_name}_chunk_{chunk_idx}.pt",
             )
-            chunk = torch.load(chunk_path, weights_only=False)
+            chunk = torch.load(chunk_path, map_location="cpu", weights_only=False)
             # Evict the oldest entry when the cache is full
             if len(self._chunk_cache) >= self._n_cached_chunks:
                 self._chunk_cache.popitem(last=False)

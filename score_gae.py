@@ -99,14 +99,24 @@ def parse_arguments():
     return parser.parse_args()
 
 
-def graph_build_config(graph_settings, label=0.0):
+def graph_build_config(graph_settings, label=0.0, num_features=None):
     """The GraphBuildConfig stored in a checkpoint's graph settings."""
     allowed = {field.name for field in dataclasses.fields(GraphBuildConfig)}
-    kwargs = {
-        key: value
-        for key, value in graph_settings.items()
-        if key in allowed and key != "label"
-    }
+    kwargs = {key: value for key, value in graph_settings.items() if key in allowed and key != "label"}
+    if kwargs.get("use_lund_decomp") and num_features is not None:
+        n_lund = kwargs.get("n_lund_vars", 5)
+        n_frac = 4 if kwargs.get("save_energy_fractions", True) else 0
+        n_disp = 2 if kwargs.get("use_displacement", False) else 0
+        n_4vec = 3 if kwargs.get("save_4vectors_in_lund_tree", False) else 0
+        expected = n_lund + n_frac + n_disp + n_4vec
+        if num_features != expected:
+            raise ValueError(
+                f"Checkpoint feature mismatch: model checkpoint has {num_features} node features, "
+                f"but its stored graph settings specify {expected} features "
+                f"(save_4vectors_in_lund_tree={kwargs.get('save_4vectors_in_lund_tree', False)}). "
+                f"This indicates the model was trained on an incompatible data folder. "
+                f"Automatic fallback is disabled to prevent using incorrect datasets or configurations."
+            )
     kwargs["label"] = label
     return GraphBuildConfig(**kwargs)
 
@@ -184,7 +194,7 @@ def main():
         seed=args.seed,
         base_dir=args.data_dir,
     )
-    checkpoint = torch.load(checkpoint_path, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     print(f"Model: {checkpoint['model_spec']}")
     print(f"Model checkpoint path: {checkpoint_path}")
     device = torch.device(
@@ -207,7 +217,7 @@ def main():
 
     for sample in config.select(args.samples):
         name = sample.name
-        build_config = graph_build_config(graph_settings, sample.label)
+        build_config = graph_build_config(graph_settings, sample.label, num_features=checkpoint.get("num_features"))
 
         scorer = RootGraphScorer(
             model,

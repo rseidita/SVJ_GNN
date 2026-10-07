@@ -222,6 +222,7 @@ def queue_items(args, config):
 def job_arguments(args, config):
     """Arguments appended after the stage, sample and shard."""
     if args.stage == "train":
+        print(f"Model: {config.model.spec}")
         pieces = [f"--config {args.config}"]
         if args.samples and "--train-on" not in args.job_arguments:
             pieces.append(f"--train-on {' '.join(args.samples)}")
@@ -253,6 +254,8 @@ def job_arguments(args, config):
             seed=args.seed,
             base_dir=args.eos_dir if args.output_location == "eos" else None,
         )
+        print(f"Model: {config.model.spec}")
+        print(f"Model checkpoint path: {ckpt_path}")
         if ckpt_path and "--checkpoint" not in args.job_arguments:
             pieces.append(f"--checkpoint {ckpt_path}")
         if args.run_name and "--run-name" not in args.job_arguments:

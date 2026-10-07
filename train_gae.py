@@ -253,6 +253,8 @@ def main():
         run_name = default_run_name
     output_dir = os.path.join(base_output_dir, run_name)
     os.makedirs(output_dir, exist_ok=True)
+    print(f"Model: {config.model.spec}")
+    print(f"Model checkpoint directory: {os.path.abspath(output_dir)}")
 
     checkpoint_data = None
     if args.resume is not None:
@@ -303,6 +305,19 @@ def main():
         )
         split_state = stats_loader.get_split_state()
         num_features = stats_loader.dataset[0].num_node_features
+        if config.graph.get("use_lund_decomp"):
+            n_lund = config.graph.get("n_lund_vars", 5)
+            n_frac = 4 if config.graph.get("save_energy_fractions", True) else 0
+            n_disp = 2 if config.graph.get("use_displacement", False) else 0
+            n_4vec = 3 if config.graph.get("save_4vectors_in_lund_tree", False) else 0
+            expected = n_lund + n_frac + n_disp + n_4vec
+            if num_features != expected:
+                raise ValueError(
+                    f"Dataset feature mismatch: loaded dataset has {num_features} node features, "
+                    f"but config.graph specifies {expected} features "
+                    f"(save_4vectors_in_lund_tree={config.graph.get('save_4vectors_in_lund_tree', False)}). "
+                    f"Training aborted to prevent training on an incompatible dataset."
+                )
         means, stds = compute_normalization_stats(
             stats_loader, num_features, verbose=verbose
         )
@@ -337,6 +352,7 @@ def main():
     model = build_model(
         config.model.spec, num_features, **config.model.kwargs
     ).to(device)
+    print(f"Built model {config.model.spec} ({num_features} node features) on {device}")
     optimizer = torch.optim.Adam(
         model.parameters(), lr=settings["learning_rate"]
     )
@@ -382,6 +398,17 @@ def main():
     print(f"Training schedule: starting at epoch {start_epoch}, targeting total {total_epochs} epochs.")
 
     def save_checkpoint(path, current_epoch, current_best_loss):
+        saved_graph = dict(config.graph)
+        if saved_graph.get("use_lund_decomp"):
+            n_lund = saved_graph.get("n_lund_vars", 5)
+            n_frac = 4 if saved_graph.get("save_energy_fractions", True) else 0
+            n_disp = 2 if saved_graph.get("use_displacement", False) else 0
+            features_without_4vec = n_lund + n_frac + n_disp
+            features_with_4vec = features_without_4vec + 3
+            if num_features == features_without_4vec:
+                saved_graph["save_4vectors_in_lund_tree"] = False
+            elif num_features == features_with_4vec:
+                saved_graph["save_4vectors_in_lund_tree"] = True
         payload = {
             "epoch": current_epoch,
             "state_dict": model.state_dict(),
@@ -397,7 +424,7 @@ def main():
             "split_state": split_state,
             "alpha": alpha,
             "seed": active_seed,
-            "graph": dict(config.graph),
+            "graph": saved_graph,
             "training": settings,
             "train_samples": [sample.name for sample in samples],
         }
@@ -521,8 +548,9 @@ def main():
     with open(history_path, "w") as history_file:
         json.dump(history, history_file, indent=2)
 
-    print(f"Wrote {checkpoint_path}")
-    print(f"Wrote {history_path}")
+    print(f"Model: {config.model.spec}")
+    print(f"Saved model checkpoint: {os.path.abspath(checkpoint_path)}")
+    print(f"Saved training history: {os.path.abspath(history_path)}")
 
     if experiment is not None:
         experiment.log_asset(checkpoint_path)

@@ -250,7 +250,9 @@ def residual_plots(args, config, formats, outdir):
     from data_loading.graphDataLoader import GraphDataLoader
     from utils.LundTreeUtilities import OnTheFlyNormalizer
 
-    checkpoint = torch.load(args.checkpoint, weights_only=False)
+    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    print(f"Model: {checkpoint['model_spec']}")
+    print(f"Model checkpoint path: {args.checkpoint}")
     model = build_model(
         checkpoint["model_spec"],
         checkpoint["num_features"],
