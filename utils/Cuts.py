@@ -61,9 +61,12 @@ def is_mc(role):
     return role != "data"
 
 
-def cut_branches(role, year):
+def cut_branches(role, year, region="control"):
     """Branches the selection needs for a sample of this role and year."""
     branches = list(COMMON_BRANCHES)
+    if region in ("validation", "highRT", "lowRT"):
+        if "RTFatJet" not in branches:
+            branches.append("RTFatJet")
     if is_mc(role) and str(year) == "2018":
         branches.append("HEMVeto")
     return branches
@@ -119,7 +122,7 @@ def leading_jets_are_good(events):
     )
 
 
-def selection_steps(events, role, year):
+def selection_steps(events, role, year, region="control"):
     """Ordered ``[(label, mask), ...]`` of the individual selections.
 
     Each mask is the per-step decision on its own; ``event_cut_mask`` ANDs
@@ -129,12 +132,29 @@ def selection_steps(events, role, year):
     steps.append(("isGood j0,j1", leading_jets_are_good(events)))
 
     delta_eta = np.abs(np.asarray(events["DeltaEtaJ0J1FatJet"]))
-    steps.append(
-        (
-            f"{DELTA_ETA_MIN} < |dEta(j0,j1)| < {DELTA_ETA_MAX}",
-            (delta_eta > DELTA_ETA_MIN) & (delta_eta < DELTA_ETA_MAX),
+    if region in ("control", "validation"):
+        steps.append(
+            (
+                f"{DELTA_ETA_MIN} < |dEta(j0,j1)| < {DELTA_ETA_MAX}",
+                (delta_eta > DELTA_ETA_MIN) & (delta_eta < DELTA_ETA_MAX),
+            )
         )
-    )
+    elif region in ("signal_region", "signal"):
+        steps.append(
+            (
+                f"|dEta(j0,j1)| <= {DELTA_ETA_MIN}",
+                delta_eta <= DELTA_ETA_MIN,
+            )
+        )
+    elif region != "inclusive":
+        raise ValueError(f"Unknown selection region: {region!r}")
+
+    if region in ("validation", "highRT"):
+        rt = np.asarray(events["RTFatJet"])
+        steps.append(("RT > 0.24", rt > 0.24))
+    elif region == "lowRT":
+        rt = np.asarray(events["RTFatJet"])
+        steps.append(("0.15 < RT <= 0.24", (rt > 0.15) & (rt <= 0.24)))
 
     if str(year) == "2018":
         post_hem = post_hem_mask(events, role, year)
@@ -154,24 +174,24 @@ def selection_steps(events, role, year):
     return steps
 
 
-def event_cut_mask(events, role, year):
+def event_cut_mask(events, role, year, region="control"):
     """Return a boolean mask over the entries in *events*.
 
     *events* is the awkward record array read from the ``Events`` tree,
     containing at least the graph-building branches plus
-    ``cut_branches(role, year)``.
+    ``cut_branches(role, year, region=region)``.
     """
     mask = np.ones(len(events), dtype=bool)
-    for _, step_mask in selection_steps(events, role, year):
+    for _, step_mask in selection_steps(events, role, year, region=region):
         mask &= step_mask
     return mask
 
 
-def cutflow(events, role, year):
+def cutflow(events, role, year, region="control"):
     """``{label: events surviving up to and including this step}``."""
     counts = {}
     mask = np.ones(len(events), dtype=bool)
-    for label, step_mask in selection_steps(events, role, year):
+    for label, step_mask in selection_steps(events, role, year, region=region):
         mask &= step_mask
         counts[label] = int(mask.sum())
     return counts
