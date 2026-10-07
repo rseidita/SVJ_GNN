@@ -36,6 +36,7 @@ TAR_EXCLUDES = (
     ".venv-gae",
     "data",
     "scores",
+    "output_scores",
     "plots",
     "training",
     "condor/logs",

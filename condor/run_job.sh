@@ -29,7 +29,7 @@ case ${STAGE} in
         ;;
     score)
         python score_gae.py --samples "${SAMPLE}" --shard "${SHARD}" "$@"
-        OUTPUTS="scores"
+        OUTPUTS="output_scores"
         ;;
     train)
         python train_gae.py "$@"

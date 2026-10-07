@@ -46,7 +46,7 @@ case ${GAE_STAGE} in
     score)
         python score_gae.py --samples "${GAE_SAMPLE}" \
             --files ${JOB_FILES} ${GAE_ARGUMENTS}
-        OUTPUTS="scores"
+        OUTPUTS="output_scores"
         ;;
     *)
         echo "Unknown GAE_STAGE '${GAE_STAGE}'; expected produce or score"
