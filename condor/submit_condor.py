@@ -110,8 +110,8 @@ def parse_arguments():
     parser.add_argument(
         "--min-gpu-memory",
         type=int,
-        default=30000,
-        help="Minimum GPU VRAM in MB (default: 30000 MB to target 31.7 GB+ V100/A100/H100)",
+        default=10000,
+        help="Minimum GPU VRAM in MB (default: 10000 MB to target 10.0 GB+ V100/A100/H100)",
     )
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size for training")
     parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate for training")
@@ -356,8 +356,8 @@ def main():
     min_gpu_mem = args.min_gpu_memory
     gpu_requirement = (
         f"request_gpus           = {num_gpus}\n"
-        f"requirements            = (TARGET.GPUs_Capability >= 7.0)"
-        + (f" && (TARGET.GPUs_GlobalMemoryMb >= {min_gpu_mem})" if min_gpu_mem else "")
+        # f"requirements            = (TARGET.GPUs_Capability >= 7.0)"
+        # + (f" && (TARGET.GPUs_GlobalMemoryMb >= {min_gpu_mem})" if min_gpu_mem else "")
         + f"\nRank                    = TARGET.GPUs_Capability * 1000 + TARGET.GPUs_GlobalMemoryMb"
         if num_gpus
         else "# no GPU requested"
