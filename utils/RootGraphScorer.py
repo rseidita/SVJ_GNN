@@ -339,6 +339,15 @@ class RootGraphScorer:
                 ranges.close()
             progress.close()
 
+    def score_events(self, events):
+        """Return one event-ordered jagged score array for an awkward Array of events."""
+        if len(events) == 0:
+            return ak.Array([])
+        jet_counts, graphs, positions = _build_graphs(
+            events, self.graph_config, self.max_jets
+        )
+        return self._assemble_scores(jet_counts, graphs, positions)
+
     def score_file(self, file_name):
         """Return one event-ordered jagged score array for *file_name*."""
         chunks = [chunk.scores for chunk in self.iter_file(file_name)]

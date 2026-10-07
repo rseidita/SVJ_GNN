@@ -82,6 +82,12 @@ def parse_arguments():
         default=None,
         help="Score only these input files (xrootd URLs or local paths)",
     )
+    parser.add_argument(
+        "--region",
+        default="control",
+        choices=["control", "signal_region", "signal", "validation", "highRT", "lowRT", "inclusive"],
+        help="Selection region (control, signal_region, validation, inclusive)",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
@@ -117,16 +123,9 @@ def base_event_weight(file_path, weights, groups, initial_events_cache):
 
 
 def select_scored_jets(
-    scores, events, config, weight, extra_branches, role, year
+    scores, selected_events, original_entries, config, weight, extra_branches
 ):
-    """Flatten jagged scores to selected jets, applying the shared cuts."""
-    mask = np.asarray(event_cut_mask(events, role, year), dtype=bool)
-    if mask.shape != (len(events),):
-        raise ValueError(
-            "event_cut_mask must return one boolean per event, got shape "
-            f"{mask.shape} for {len(events)} events"
-        )
-
+    """Flatten jagged scores to selected jets."""
     columns = {
         "entry": [],
         "jet": [],
@@ -136,9 +135,8 @@ def select_scored_jets(
     for name in extra_branches:
         columns[name] = []
 
-    for entry in np.flatnonzero(mask):
-        event = events[entry]
-        for jet_index, score in enumerate(scores[entry]):
+    for idx, (entry, event) in enumerate(zip(original_entries, selected_events)):
+        for jet_index, score in enumerate(scores[idx]):
             if not np.isfinite(score):
                 continue
             if not jet_cut_mask(event, jet_index, config):
@@ -218,7 +216,7 @@ def main():
         groups, file_paths = score_paths_for_sample(sample, args)
         initial_events_cache = {}
 
-        branches = cut_branches(sample.role, sample.year)
+        branches = cut_branches(sample.role, sample.year, region=args.region)
         for branch in args.extra_branches:
             if branch not in branches:
                 branches.append(branch)
@@ -230,29 +228,41 @@ def main():
         n_jets_total = 0
         for file_path in file_paths:
             file_path = normalize_input_path(file_path)
-            scores = scorer.score_file(file_path)
             weight = base_event_weight(
                 file_path, sample.weights, groups, initial_events_cache
             )
             with uproot.open(f"{file_path}:Events") as tree:
                 events = tree.arrays(
                     read_branches,
-                    entry_stop=len(scores),
+                    entry_stop=args.max_events,
                     library="ak",
                 )
             dataset = dataset_of(file_path, groups)
             cutflows[dataset] = add_cutflow(
                 cutflows.get(dataset, {}),
-                cutflow(events, sample.role, sample.year),
+                cutflow(events, sample.role, sample.year, region=args.region),
             )
+            mask = np.asarray(
+                event_cut_mask(events, sample.role, sample.year, region=args.region),
+                dtype=bool,
+            )
+            if not mask.any():
+                print(
+                    f"No selected events in {os.path.basename(file_path)} "
+                    f"for sample '{name}' (region={args.region}); skipping scoring"
+                )
+                continue
+
+            selected_events = events[mask]
+            original_entries = np.flatnonzero(mask)
+            scores = scorer.score_events(selected_events)
             columns = select_scored_jets(
                 scores,
-                events,
+                selected_events,
+                original_entries,
                 build_config,
                 weight,
                 args.extra_branches,
-                sample.role,
-                sample.year,
             )
             if not columns["score"]:
                 print(
@@ -274,7 +284,7 @@ def main():
             )
 
         for dataset, counts in cutflows.items():
-            print(format_cutflow(f"{name} / {dataset} (scoring)", counts))
+            print(format_cutflow(f"{name} / {dataset} (scoring, region={args.region})", counts))
 
         if not n_jets_total:
             print(f"Sample '{name}' has no selected jets; nothing written")
