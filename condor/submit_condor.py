@@ -32,12 +32,16 @@ from utils.InputJson import shard_files  # noqa: E402
 TAR_EXCLUDES = (
     ".git",
     ".venv-gae",
-    "data",
-    "scores",
-    "output_scores",
-    "plots",
-    "training",
-    "condor/logs",
+    "SVJ_GNN/data",
+    "SVJ_GNN/data_aimar",
+    "SVJ_GNN/scores",
+    "SVJ_GNN/output_scores",
+    "SVJ_GNN/output_scores_aimar",
+    "SVJ_GNN/plots",
+    "SVJ_GNN/plots_aimar",
+    "SVJ_GNN/training",
+    "SVJ_GNN/training_aimar",
+    "SVJ_GNN/condor/logs",
     "*.ipynb",
     "*.root",
     "__pycache__",
@@ -95,7 +99,7 @@ def parse_arguments():
     parser.add_argument("--submit-dir", default=os.path.join(CONDOR_DIR, "submit"))
     parser.add_argument("--log-dir", default=os.path.join(CONDOR_DIR, "logs"))
     parser.add_argument("--request-cpus", type=int, default=1)
-    parser.add_argument("--request-memory", default="4 GB")
+    parser.add_argument("--request-memory", default="8 GB")
     parser.add_argument("--request-disk", default="4 GB")
     parser.add_argument(
         "--request-gpus",
@@ -103,6 +107,17 @@ def parse_arguments():
         default=None,
         help="Request GPUs; defaults to 1 for train stage",
     )
+    parser.add_argument(
+        "--min-gpu-memory",
+        type=int,
+        default=10000,
+        help="Minimum GPU VRAM in MB (default: 10000 MB to target 10.0 GB+ V100/A100/H100)",
+    )
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size for training")
+    parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate for training")
+    parser.add_argument("--epochs", type=int, default=None, help="Total epochs for training")
+    parser.add_argument("--amp", action="store_true", default=None, help="Enable Automatic Mixed Precision (AMP)")
+    parser.add_argument("--no-amp", action="store_true", default=None, help="Disable Automatic Mixed Precision (AMP)")
     parser.add_argument(
         "--job-flavour",
         default="workday",
@@ -138,11 +153,53 @@ def parse_arguments():
         help="List of random seeds to train multiple independent runs (train stage only)",
     )
     parser.add_argument(
+        "--comet",
+        action="store_true",
+        default=False,
+        help="Enable Comet ML tracking for training jobs",
+    )
+    parser.add_argument(
+        "--no-comet",
+        action="store_true",
+        default=False,
+        help="Explicitly disable Comet ML tracking for training jobs",
+    )
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Checkpoint path for scoring stage (defaults to previous train stage output location)",
+    )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Custom run name for training output checkpoints and logs (train stage only)",
+    )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="auto",
+        default=None,
+        help="Resume training: 'auto' (default if flag given without value) or path to checkpoint file (train stage only)",
+    )
+    parser.add_argument(
+        "--add-epochs",
+        type=int,
+        default=None,
+        help="Number of additional epochs to train beyond checkpoint recorded epoch (train stage only)",
+    )
+    parser.add_argument(
+        "--save-every-n-epochs",
+        type=int,
+        default=None,
+        help="Frequency of saving checkpoint_latest.pt during training (train stage only)",
+    )
+    parser.add_argument(
         "--job-arguments",
         default="",
         help="Extra arguments appended to the stage's python command",
     )
     parser.add_argument("--skip-tarball", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Generate submit JDL and tarball without calling condor_submit")
     return parser.parse_args()
 
 
@@ -168,11 +225,12 @@ def make_tarball(path):
 def queue_items(args, config):
     """One ``stage, sample, shard`` line per job."""
     if args.stage == "train":
+        sample_tag = args.run_name or ("_".join(args.samples) if args.samples else "train")
         if args.seeds:
-            return [f"{args.stage}, train_seed{seed}, 0" for seed in args.seeds]
+            return [f"{args.stage}, {sample_tag}_seed{seed}, 0" for seed in args.seeds]
         if args.seed is not None:
-            return [f"{args.stage}, train_seed{args.seed}, 0"]
-        return [f"{args.stage}, train, 0"]
+            return [f"{args.stage}, {sample_tag}_seed{args.seed}, 0"]
+        return [f"{args.stage}, {sample_tag}, 0"]
 
     items = []
     for sample in config.select(args.samples):
@@ -184,17 +242,93 @@ def queue_items(args, config):
     return items
 
 
-def job_arguments(args):
+def job_arguments(args, config):
     """Arguments appended after the stage, sample and shard."""
     if args.stage == "train":
+        print(f"Model: {config.model.spec}")
         pieces = [f"--config {args.config}"]
+        if args.samples and "--train-on" not in args.job_arguments:
+            pieces.append(f"--train-on {' '.join(args.samples)}")
+        if args.output_location == "eos" and args.eos_dir and "--data-dir" not in args.job_arguments:
+            pieces.append(f"--data-dir {args.eos_dir}")
+        if args.run_name and "--run-name" not in args.job_arguments:
+            pieces.append(f"--run-name {args.run_name}")
+        if args.batch_size is not None and "--batch-size" not in args.job_arguments:
+            pieces.append(f"--batch-size {args.batch_size}")
+        if args.learning_rate is not None and "--learning-rate" not in args.job_arguments:
+            pieces.append(f"--learning-rate {args.learning_rate}")
+        if args.epochs is not None and "--epochs" not in args.job_arguments:
+            pieces.append(f"--epochs {args.epochs}")
+        if args.amp and "--amp" not in args.job_arguments:
+            pieces.append("--amp")
+        if args.no_amp and "--no-amp" not in args.job_arguments:
+            pieces.append("--no-amp")
+        if args.comet and "--comet" not in args.job_arguments:
+            pieces.append("--comet")
+        if args.no_comet and "--no-comet" not in args.job_arguments:
+            pieces.append("--no-comet")
         if args.seed is not None and not args.seeds:
             pieces.append(f"--seed {args.seed}")
+        if args.resume is not None and "--resume" not in args.job_arguments:
+            pieces.append(f"--resume {args.resume}" if args.resume != "auto" else "--resume")
+            print(f"Training resume mode: {args.resume}")
+        if args.add_epochs is not None and "--add-epochs" not in args.job_arguments:
+            pieces.append(f"--add-epochs {args.add_epochs}")
+        if args.save_every_n_epochs is not None and "--save-every-n-epochs" not in args.job_arguments:
+            pieces.append(f"--save-every-n-epochs {args.save_every_n_epochs}")
+    elif args.stage == "score":
+        pieces = [f"--config {args.config}", f"--files-per-job {args.files_per_job}"]
+        ckpt_path = config.find_checkpoint(
+            args.checkpoint,
+            run_name=args.run_name,
+            seed=args.seed,
+            base_dir=args.eos_dir if args.output_location == "eos" else None,
+        )
+        print(f"Model: {config.model.spec}")
+        print(f"Model checkpoint path: {ckpt_path}")
+        if ckpt_path and "--checkpoint" not in args.job_arguments:
+            pieces.append(f"--checkpoint {ckpt_path}")
+        if args.run_name and "--run-name" not in args.job_arguments:
+            pieces.append(f"--run-name {args.run_name}")
     else:
         pieces = [f"--config {args.config}", f"--files-per-job {args.files_per_job}"]
     if args.job_arguments:
         pieces.append(args.job_arguments)
     return " ".join(pieces)
+
+
+def prepare_output_directories(args, config):
+    """Pre-create destination directories before submitting batch jobs to prevent worker race conditions."""
+    base_dir = args.eos_dir if args.output_location == "eos" else "."
+
+    if args.stage == "produce":
+        prod_dir = config.production.get("output_dir", "data")
+        samples = config.select(args.samples)
+        for sample in samples:
+            target_processed = os.path.join(base_dir, prod_dir, sample.name, "processed")
+            os.makedirs(target_processed, exist_ok=True)
+            print(f"Pre-created directory: {target_processed}")
+    elif args.stage == "score":
+        scoring_dir = config.scoring.get("output_dir", "output_scores")
+        target_dir = os.path.join(base_dir, scoring_dir)
+        os.makedirs(target_dir, exist_ok=True)
+        print(f"Pre-created directory: {target_dir}")
+    elif args.stage == "train":
+        train_dir = config.training.get("output_dir", "training")
+        run_name = args.run_name or config.model.spec.replace(".", "_")
+        if args.seeds:
+            for seed in args.seeds:
+                target_dir = os.path.join(base_dir, train_dir, f"{run_name}_seed{seed}")
+                os.makedirs(target_dir, exist_ok=True)
+                print(f"Pre-created directory: {target_dir}")
+        elif args.seed is not None:
+            target_dir = os.path.join(base_dir, train_dir, f"{run_name}_seed{args.seed}")
+            os.makedirs(target_dir, exist_ok=True)
+            print(f"Pre-created directory: {target_dir}")
+        else:
+            target_dir = os.path.join(base_dir, train_dir, run_name)
+            os.makedirs(target_dir, exist_ok=True)
+            print(f"Pre-created directory: {target_dir}")
 
 
 def main():
@@ -207,6 +341,9 @@ def main():
 
     os.makedirs(args.submit_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
+    stage_log_dir = os.path.join(args.log_dir, args.stage)
+    os.makedirs(stage_log_dir, exist_ok=True)
+    prepare_output_directories(args, config)
 
     tarball = os.path.join(args.submit_dir, "SVJ_GNN.tar.gz")
     if not args.skip_tarball:
@@ -216,16 +353,27 @@ def main():
         template = template_file.read()
 
     num_gpus = args.request_gpus if args.request_gpus is not None else (1 if args.stage == "train" else 0)
+    min_gpu_mem = args.min_gpu_memory
     gpu_requirement = (
-        f"request_gpus           = {num_gpus}"
+        f"request_gpus           = {num_gpus}\n"
+        # f"requirements            = (TARGET.GPUs_Capability >= 7.0)"
+        # + (f" && (TARGET.GPUs_GlobalMemoryMb >= {min_gpu_mem})" if min_gpu_mem else "")
+        + f"\nRank                    = TARGET.GPUs_Capability * 1000 + TARGET.GPUs_GlobalMemoryMb"
         if num_gpus
         else "# no GPU requested"
     )
 
+    env_vars = []
+    if args.output_location == "eos":
+        env_vars.append(f"GAE_OUTPUT_EOS={args.eos_dir}")
+    api_key = os.environ.get("COMET_API_KEY", "8pkRGAjV7ZfkZfIKjdQQPCQuT")
+    if api_key:
+        env_vars.append(f"COMET_API_KEY={api_key}")
+
     env_setting = (
-        f'Environment             = "GAE_OUTPUT_EOS={args.eos_dir}"'
-        if args.output_location == "eos"
-        else "# Output location: local (Condor file transfer)"
+        f'Environment             = "{" ".join(env_vars)}"'
+        if env_vars
+        else "# No extra environment variables"
     )
 
     submit_file = template
@@ -240,7 +388,7 @@ def main():
         ("GPU_REQUIREMENT", gpu_requirement),
         ("JOB_FLAVOUR", args.job_flavour),
         ("ENVIRONMENT_SETTING", env_setting),
-        ("JOB_ARGUMENTS", job_arguments(args)),
+        ("JOB_ARGUMENTS", job_arguments(args, config)),
         ("QUEUE_ITEMS", "\n".join(queue_items(args, config))),
     ):
         submit_file = submit_file.replace(placeholder, value)
@@ -251,6 +399,10 @@ def main():
 
     print(f"Wrote {submit_path}")
     print(f"Submit it with: condor_submit {submit_path}")
+    if not args.dry_run:
+        subprocess.run(["condor_submit", submit_path], check=True)
+    else:
+        print("[dry-run] JDL generated successfully. Condor submission skipped.")
 
 
 if __name__ == "__main__":

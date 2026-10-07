@@ -22,6 +22,18 @@ cd SVJ_GNN
 
 source setup_gae_env.sh
 
+if [ -n "${GAE_OUTPUT_EOS}" ] && [ -d "${GAE_OUTPUT_EOS}" ]; then
+    for d in $(ls "${GAE_OUTPUT_EOS}" 2>/dev/null); do
+        if [ -d "${GAE_OUTPUT_EOS}/${d}" ] && [ ! -e "${d}" ]; then
+            ln -sfn "${GAE_OUTPUT_EOS}/${d}" "${d}"
+        fi
+    done
+fi
+
+if [[ " $* " =~ " --comet " ]]; then
+    python -c "import comet_ml" 2>/dev/null || python -m pip install --quiet --no-cache-dir comet_ml 2>/dev/null || true
+fi
+
 case ${STAGE} in
     produce)
         python produce_graphs.py --samples "${SAMPLE}" --shard "${SHARD}" "$@"
@@ -30,7 +42,11 @@ case ${STAGE} in
         python score_gae.py --samples "${SAMPLE}" --shard "${SHARD}" "$@"
         ;;
     train)
-        python train_gae.py "$@"
+        if [[ "${SAMPLE}" =~ _seed([0-9]+)$ ]] || [[ "${SAMPLE}" =~ ^train_seed([0-9]+)$ ]]; then
+            python train_gae.py --seed "${BASH_REMATCH[1]}" "$@"
+        else
+            python train_gae.py "$@"
+        fi
         ;;
     contamination)
         YEAR="${SAMPLE%%__*}"
@@ -80,15 +96,19 @@ fi
 
 if [ -n "${GAE_OUTPUT_EOS}" ]; then
     echo "Saving ${OUTPUTS} to ${GAE_OUTPUT_EOS}"
-    for file in $(find "${OUTPUTS}" -type f); do
-        if [[ "${GAE_OUTPUT_EOS}" == root://* ]]; then
-            xrdcp -f "${file}" "${GAE_OUTPUT_EOS}/${file}"
-        else
-            dest="${GAE_OUTPUT_EOS}/${file}"
-            mkdir -p "$(dirname "${dest}")"
-            cp -f "${file}" "${dest}"
-        fi
-    done
+    if [ -d "${OUTPUTS}" ]; then
+        for file in $(find "${OUTPUTS}" -type f); do
+            if [[ "${GAE_OUTPUT_EOS}" == root://* ]]; then
+                xrdcp -f "${file}" "${GAE_OUTPUT_EOS}/${file}"
+            else
+                dest="${GAE_OUTPUT_EOS}/${file}"
+                if [ "$(realpath "${file}" 2>/dev/null)" != "$(realpath "${dest}" 2>/dev/null)" ]; then
+                    mkdir -p "$(dirname "${dest}")" || true
+                    cp -f "${file}" "${dest}" || (sleep 2 && cp -f "${file}" "${dest}")
+                fi
+            fi
+        done
+    fi
 else
     # No EOS target, so hand the outputs back through condor file transfer.
     tar -czf "../${STAGE}_${SAMPLE}_${SHARD}_output.tar.gz" "${OUTPUTS}"

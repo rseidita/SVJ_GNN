@@ -19,7 +19,7 @@ GAE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "${GAE_DIR}/../init.sh" ]; then
     source "${GAE_DIR}/../init.sh"
 else
-    source /cvmfs/sft.cern.ch/lcg/views/LCG_108_cuda/x86_64-el9-gcc13-opt/setup.sh
+    source /cvmfs/sft.cern.ch/lcg/views/LCG_107_cuda/x86_64-el9-gcc11-opt/setup.sh
 fi
 
 if [ -f "${GAE_DIR}/.venv-gae/bin/activate" ]; then

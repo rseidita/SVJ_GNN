@@ -218,8 +218,8 @@ class JetGraphProducer(Dataset):
         self.event_batch_size = int(event_batch_size)
         # Compatibility aliases for external code.
         self.chunk_size = self.graphs_per_chunk
-        self.processing_batch_size = self.event_batch_size
-        self._n_cached_chunks = n_cached_chunks
+        cache_env = os.environ.get("GAE_CHUNK_CACHE_SIZE")
+        self._n_cached_chunks = int(cache_env) if cache_env else (50 if n_cached_chunks == 2 else n_cached_chunks)
         self.validate_cache_config = validate_cache_config
         self.num_workers = int(num_workers)
         self.worker_prefetch = int(worker_prefetch)
@@ -262,7 +262,7 @@ class JetGraphProducer(Dataset):
         # Load lightweight metadata from disk (weights, jet indices, total count).
         # No graph tensors are loaded here — those are fetched on-demand in get().
         meta_path = os.path.join(self.processed_dir, f"{self.output_dataset_name}_meta.pt")
-        meta = torch.load(meta_path, weights_only=False)
+        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
         if self.validate_cache_config:
             self._validate_processing_config(meta, meta_path)
         # The on-disk layout must always come from metadata. This is
@@ -713,7 +713,7 @@ class JetGraphProducer(Dataset):
                 self.processed_dir,
                 f"{self.output_dataset_name}_chunk_{chunk_idx}.pt",
             )
-            chunk = torch.load(chunk_path, weights_only=False)
+            chunk = torch.load(chunk_path, map_location="cpu", weights_only=False)
             # Evict the oldest entry when the cache is full
             if len(self._chunk_cache) >= self._n_cached_chunks:
                 self._chunk_cache.popitem(last=False)
