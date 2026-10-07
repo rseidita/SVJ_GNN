@@ -27,28 +27,9 @@ import numpy as np
 import uproot
 from tqdm import tqdm
 
-from utils.BucketCache import (
-    bucket_cache_key,
-    load_bucket_cache,
-    save_bucket_cache,
-)
-from utils.Cuts import (
-    add_cutflow,
-    cut_branches,
-    cuts_fingerprint,
-    event_cut_mask,
-    format_cutflow,
-    post_hem_mask,
-    selection_steps,
-)
-from utils.InputJson import (
-    dataset_groups,
-    dataset_of,
-    flat_files,
-    load_input_json,
-    normalize_input_path,
-    shard_files,
-)
+from utils.BucketCache import bucket_cache_key, load_bucket_cache, save_bucket_cache
+from utils.Cuts import add_cutflow, cut_branches, cuts_fingerprint, event_cut_mask, format_cutflow, post_hem_mask, selection_steps
+from utils.InputJson import dataset_groups, dataset_of, flat_files, load_input_json, normalize_input_path, shard_files
 
 LUMI_FB = {
     "2016": {"lumi": 36.31},
@@ -65,14 +46,12 @@ QCD_KFACTOR_BY_YEAR = {"2017": 1.0, "2018": 1.0}
 @dataclasses.dataclass
 class McWeightContext:
     """Per-event MC scale: xsec * 1e3 / N_initial (dataset), times QCD k-factor."""
-
     scale: float
 
 
 @dataclasses.dataclass
 class BucketStats:
     """Passing-event totals for one bucket (data, qcd, or one signal point)."""
-
     n_pass: int = 0
     w_pass: float = 0.0
     n_pre: int = 0
@@ -97,13 +76,7 @@ class BucketStats:
 class IoProgress:
     """Tracks read/cut/metadata time; verbose timing only with --debug."""
 
-    def __init__(
-        self,
-        quiet=False,
-        debug=False,
-        log_every_batches=5,
-        log_every_seconds=30.0,
-    ):
+    def __init__(self, quiet=False, debug=False, log_every_batches=5, log_every_seconds=30.0):
         self.quiet = quiet
         self.debug = debug
         self.log_every_batches = log_every_batches
@@ -134,30 +107,17 @@ class IoProgress:
         self.cuts = 0.0
         if not self.debug:
             return
-        print(
-            f"  I/O: iterate chunks  step_size={step_size!r}  "
-            f"file_workers={getattr(self, '_file_workers', 1)}  "
-            f"uproot_workers={num_workers}  files={n_files}  branches={n_branches}"
-        )
+        print(f"  I/O: iterate chunks  step_size={step_size!r}  file_workers={getattr(self, '_file_workers', 1)}  uproot_workers={num_workers}  files={n_files}  branches={n_branches}")
 
     def maybe_log(self, n_pass_total):
         if not self.debug:
             return
         now = time.perf_counter()
-        if (
-            self.batches % self.log_every_batches != 0
-            and (now - self._last_log) < self.log_every_seconds
-        ):
+        if self.batches % self.log_every_batches != 0 and (now - self._last_log) < self.log_every_seconds:
             return
         self._last_log = now
         wall = now - self._bucket_start
-        print(
-            f"  [{self._bucket_label}] chunk {self.batches}  "
-            f"entries_read={self.entries_read}  pass={n_pass_total}  "
-            f"wall={wall:.0f}s  "
-            f"read={self.events_read:.1f}s  cuts={self.cuts:.1f}s  "
-            f"metadata={self.metadata_io:.1f}s"
-        )
+        print(f"  [{self._bucket_label}] chunk {self.batches}  entries_read={self.entries_read}  pass={n_pass_total}  wall={wall:.0f}s  read={self.events_read:.1f}s  cuts={self.cuts:.1f}s  metadata={self.metadata_io:.1f}s")
 
     def report(self, title):
         if not self.debug:
@@ -169,12 +129,7 @@ class IoProgress:
             print("  (no timed read/cut activity recorded)")
             return
         other = max(0.0, wall - accounted)
-        for label, value in (
-            ("events_read", self.events_read),
-            ("cuts", self.cuts),
-            ("metadata_io", self.metadata_io),
-            ("other/wait", other),
-        ):
+        for label, value in [("events_read", self.events_read), ("cuts", self.cuts), ("metadata_io", self.metadata_io), ("other/wait", other)]:
             pct = 100.0 * value / wall if wall else 0.0
             print(f"  {label:<14} {value:8.2f}s  {pct:5.1f}% of wall time")
 
@@ -182,107 +137,30 @@ class IoProgress:
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--years", nargs="+", default=["2018"])
-    parser.add_argument(
-        "--max-events-per-file",
-        type=int,
-        default=None,
-        help="Cap entries read in each ROOT file",
-    )
-    parser.add_argument(
-        "--max-events-total",
-        type=int,
-        default=None,
-        help="Stop a bucket after this many skim entries read in total",
-    )
-    parser.add_argument(
-        "--lumi-fb-1",
-        type=float,
-        default=None,
-        help="Override integrated luminosity (fb-1) for the processed year(s)",
-    )
-    parser.add_argument(
-        "--background",
-        action="store_true",
-        help="Print cutflow for non-QCD background datasets only",
-    )
-    parser.add_argument(
-        "--bucket",
-        default=None,
-        help="Process only this bucket: data, qcd, or a signal dataset name",
-    )
+    parser.add_argument("--max-events-per-file", type=int, default=None, help="Cap entries read in each ROOT file")
+    parser.add_argument("--max-events-total", type=int, default=None, help="Stop a bucket after this many skim entries read in total")
+    parser.add_argument("--lumi-fb-1", type=float, default=None, help="Override integrated luminosity (fb-1) for the processed year(s)")
+    parser.add_argument("--background", action="store_true", help="Print cutflow for non-QCD background datasets only")
+    parser.add_argument("--bucket", default=None, help="Process only this bucket: data, qcd, or a signal dataset name")
     parser.add_argument("--files-per-job", type=int, default=None)
     parser.add_argument("--shard", type=int, default=None)
-    parser.add_argument(
-        "--step-size",
-        default="100 MB",
-        help="uproot.iterate chunk size (memory units, e.g. '50 MB')",
-    )
-    parser.add_argument(
-        "--workers",
-        type=int,
-        default=8,
-        help="Parallel ROOT files (ThreadPoolExecutor over per-file uproot.iterate)",
-    )
-    parser.add_argument(
-        "--uproot-workers",
-        type=int,
-        default=1,
-        help="uproot.iterate num_workers inside each file task",
-    )
-    parser.add_argument(
-        "--num-workers",
-        type=int,
-        default=None,
-        help="Alias for --uproot-workers (deprecated)",
-    )
-    parser.add_argument(
-        "--no-trigger-sf",
-        action="store_true",
-        help="Do not apply trigger data/MC SFs to MC (default: apply if JSON exists)",
-    )
-    parser.add_argument(
-        "--refresh-cache",
-        action="store_true",
-        help="Ignore cache_signal_contamination/ and re-read ROOT files",
-    )
-    parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Suppress tqdm progress bars",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Print I/O timing, metadata file opens, and chunk wall-time logs",
-    )
-    parser.add_argument(
-        "--progress-every",
-        type=int,
-        default=5,
-        help="Print progress every N chunks (and at least every 30s)",
-    )
-    parser.add_argument(
-        "--output-json",
-        default=None,
-        help="Write partial bucket counters for Condor shard merge",
-    )
-    parser.add_argument(
-        "--merge-json",
-        nargs="+",
-        default=None,
-        help="Merge shard JSON files and print contamination tables",
-    )
-    parser.add_argument(
-        "--config-dir",
-        default=os.path.dirname(os.path.abspath(__file__)),
-    )
+    parser.add_argument("--step-size", default="100 MB", help="uproot.iterate chunk size (memory units, e.g. '50 MB')")
+    parser.add_argument("--workers", type=int, default=8, help="Parallel ROOT files (ThreadPoolExecutor over per-file uproot.iterate)")
+    parser.add_argument("--uproot-workers", type=int, default=1, help="uproot.iterate num_workers inside each file task")
+    parser.add_argument("--num-workers", type=int, default=None, help="Alias for --uproot-workers (deprecated)")
+    parser.add_argument("--no-trigger-sf", action="store_true", help="Do not apply trigger data/MC SFs to MC (default: apply if JSON exists)")
+    parser.add_argument("--refresh-cache", action="store_true", help="Ignore cache_signal_contamination/ and re-read ROOT files")
+    parser.add_argument("--quiet", action="store_true", help="Suppress tqdm progress bars")
+    parser.add_argument("--debug", action="store_true", help="Print I/O timing, metadata file opens, and chunk wall-time logs")
+    parser.add_argument("--progress-every", type=int, default=5, help="Print progress every N chunks (and at least every 30s)")
+    parser.add_argument("--output-json", default=None, help="Write partial bucket counters for Condor shard merge")
+    parser.add_argument("--merge-json", nargs="+", default=None, help="Merge shard JSON files and print contamination tables")
+    parser.add_argument("--config-dir", default=os.path.dirname(os.path.abspath(__file__)))
     return parser.parse_args()
 
 
 def input_json_path(config_dir, sample_type, year):
-    return os.path.join(
-        config_dir, "inputJson", sample_type, f"{year}_{sample_type}.json"
-    )
+    return os.path.join(config_dir, "inputJson", sample_type, f"{year}_{sample_type}.json")
 
 
 def lumi_spec(args, year):
@@ -307,17 +185,42 @@ def add_weighted_cutflow(total, counts):
     return total
 
 
+ORDERED_ROOT_CUT_KEYS = [
+    "Initial",
+    "Trigger",
+    "GoodJetsAK8",
+    "nJetsAK8Gt0",
+    "HEMVeto",
+    "nJetsAK8Gt2",
+    "IsolatedLeptonVeto",
+    "goodVerticesFilter",
+    "PhiSpikeFilter",
+    "GapJetVeto",
+    "RT_selection",
+    "MT_selection",
+    "DeltaPhiMin_selection",
+    "Final",
+    "GoldenJSON",
+]
+
+
+def _is_systematic_key(key: str) -> bool:
+    return key != "Initial" and key.startswith(
+        ("Initial", "Lund", "PDF", "Scale", "PS")
+    )
+
+
 def ordered_root_cutflow_keys(root_cutflow_by_sample):
     keys = set()
     for mapping in root_cutflow_by_sample:
         keys.update(mapping.keys())
     if not keys:
         return []
-    ordered = sorted(keys)
-    if "Initial" in ordered:
-        ordered.remove("Initial")
-        ordered.insert(0, "Initial")
-    return ordered
+    ordered = [k for k in ORDERED_ROOT_CUT_KEYS if k in keys]
+    extra = sorted(
+        k for k in keys if k not in ORDERED_ROOT_CUT_KEYS and not _is_systematic_key(k)
+    )
+    return ordered + extra
 
 
 def ordered_gae_cutflow_keys(gae_cutflow_by_sample):
@@ -344,7 +247,13 @@ def read_file_root_cutflow(file_path, allow_missing=False):
                     return {}
                 raise ValueError(f"No CutFlow tree found in '{file_path}'")
             tree = input_file["CutFlow"]
-            keys = sorted({name.split(";")[0] for name in tree.keys()})
+            seen = set()
+            keys = []
+            for name in tree.keys():
+                key = name.split(";")[0]
+                if key not in seen:
+                    seen.add(key)
+                    keys.append(key)
             return {
                 key: int(tree[key].array(entry_stop=1)[0]) for key in keys
             }
@@ -381,22 +290,14 @@ def pu_over_gen(events):
     genw_pu = ak.to_numpy(events["genWeightPU"])
     genw = ak.to_numpy(events["genWeight"])
     with np.errstate(divide="ignore", invalid="ignore"):
-        ratio = np.divide(
-            genw_pu,
-            genw,
-            out=np.ones_like(genw_pu, dtype=float),
-            where=(genw != 0),
-        )
+        ratio = np.divide(genw_pu, genw, out=np.ones_like(genw_pu, dtype=float), where=(genw != 0))
     ratio[~np.isfinite(ratio)] = 1.0
     return ratio
 
 
 def mc_event_weights(events, role, year, lumi, ctx):
     n = len(events)
-    if "prefire" in ak.fields(events):
-        prefire = ak.to_numpy(events["prefire"])
-    else:
-        prefire = np.ones(n, dtype=float)
+    prefire = ak.to_numpy(events["prefire"]) if "prefire" in ak.fields(events) else np.ones(n, dtype=float)
     weights = ctx.scale * prefire * pu_over_gen(events)
     if str(year) == "2018" and "lumi_pre" in lumi and "lumi_hem" in lumi:
         post = post_hem_mask(events, role, year)
@@ -434,12 +335,36 @@ def load_trigger_sf(config_dir, year):
     return evaluate
 
 
+def bkg_family_name(dataset_name: str) -> str:
+    if dataset_name == "qcd" or dataset_name.startswith("QCD"):
+        return "QCD"
+    for fam in ("TTJets", "WJets", "ZJets"):
+        if dataset_name.startswith(fam):
+            return fam
+    return dataset_name
+
+
+def bkg_family_groups(bg_groups):
+    families = {}
+    for name, files in bg_groups.items():
+        families.setdefault(bkg_family_name(name), {})[name] = files
+    return families
+
+
 def qcd_groups(background_groups):
-    return {
-        name: files
-        for name, files in background_groups.items()
-        if name.startswith(QCD_DATASET_PREFIX)
-    }
+    return {name: files for name, files in background_groups.items() if name.startswith(QCD_DATASET_PREFIX)}
+
+
+def combine_bkg_results(results):
+    combined = {}
+    for name, stats in results.items():
+        fam = bkg_family_name(name)
+        bucket_key = "qcd" if fam == "QCD" else fam
+        if bucket_key not in combined:
+            combined[bucket_key] = BucketStats()
+        combined[bucket_key].add_counts(stats)
+        add_cutflow(combined[bucket_key].cutflow, stats.cutflow)
+    return combined
 
 
 def select_shard(file_paths, files_per_job, shard):
@@ -449,10 +374,7 @@ def select_shard(file_paths, files_per_job, shard):
         raise ValueError("--files-per-job and --shard must be used together")
     shards = shard_files(file_paths, files_per_job)
     if not 0 <= shard < len(shards):
-        raise ValueError(
-            f"--shard {shard} out of range; {len(file_paths)} files form "
-            f"{len(shards)} shards of {files_per_job}"
-        )
+        raise ValueError(f"--shard {shard} out of range; {len(file_paths)} files form {len(shards)} shards of {files_per_job}")
     return shards[shard]
 
 
@@ -474,15 +396,11 @@ def filter_signal_files(file_paths, quiet=False):
             else:
                 skipped += 1
                 if not quiet:
-                    tqdm.write(
-                        f"  Skip signal file (no CutFlow): {os.path.basename(path)}"
-                    )
+                    tqdm.write(f"  Skip signal file (no CutFlow): {os.path.basename(path)}")
         except Exception as exc:
             skipped += 1
             if not quiet:
-                tqdm.write(
-                    f"  Skip signal file (unreadable): {os.path.basename(path)}: {exc}"
-                )
+                tqdm.write(f"  Skip signal file (unreadable): {os.path.basename(path)}: {exc}")
     if skipped and not quiet:
         print(f"  Skipped {skipped} signal file(s) without CutFlow or unreadable")
     return kept
@@ -495,62 +413,35 @@ def sum_initial_events_timed(files, progress=None, debug=False):
         with uproot.open(file_path) as input_file:
             if "CutFlow" not in input_file:
                 raise ValueError(f"No CutFlow tree found in '{file_path}'")
-            total += int(
-                input_file["CutFlow"]["Initial"].array(entry_stop=1)[0]
-            )
+            total += int(input_file["CutFlow"]["Initial"].array(entry_stop=1)[0])
         elapsed = time.perf_counter() - start
         if progress is not None:
             progress.metadata_io += elapsed
         if debug:
-            print(
-                f"    CutFlow/Initial [{index + 1}/{len(files)}] "
-                f"{os.path.basename(file_path)}  {elapsed:.2f}s"
-            )
+            print(f"    CutFlow/Initial [{index + 1}/{len(files)}] {os.path.basename(file_path)}  {elapsed:.2f}s")
     return total
 
 
-def mc_weight_context(
-    file_path,
-    groups,
-    initial_events_cache,
-    year,
-    progress=None,
-    debug=False,
-):
+def mc_weight_context(file_path, groups, initial_events_cache, year, progress=None, debug=False):
     file_path = normalize_input_path(file_path)
     start = time.perf_counter()
     with uproot.open(file_path) as input_file:
         if "Metadata" not in input_file:
-            raise ValueError(
-                f"'{file_path}' has no Metadata tree; cannot apply xsec weights"
-            )
-        xsec = float(
-            input_file["Metadata"]["GenCrossSection"].array(entry_stop=1)[0]
-        )
+            raise ValueError(f"'{file_path}' has no Metadata tree; cannot apply xsec weights")
+        xsec = float(input_file["Metadata"]["GenCrossSection"].array(entry_stop=1)[0])
     elapsed = time.perf_counter() - start
     if progress is not None:
         progress.metadata_io += elapsed
     if debug:
-        print(
-            f"    Metadata GenCrossSection {os.path.basename(file_path)}  "
-            f"{elapsed:.2f}s"
-        )
+        print(f"    Metadata GenCrossSection {os.path.basename(file_path)}  {elapsed:.2f}s")
     dataset = dataset_of(file_path, groups)
     if dataset not in initial_events_cache:
         if debug:
-            print(
-                f"  summing CutFlow/Initial for dataset '{dataset}' "
-                f"({len(groups[dataset])} files)..."
-            )
-        initial_events_cache[dataset] = sum_initial_events_timed(
-            groups[dataset], progress, debug
-        )
+            print(f"  summing CutFlow/Initial for dataset '{dataset}' ({len(groups[dataset])} files)...")
+        initial_events_cache[dataset] = sum_initial_events_timed(groups[dataset], progress, debug)
     n_initial = initial_events_cache[dataset]
     if n_initial <= 0:
-        raise ValueError(
-            f"Dataset {dataset!r} has no CutFlow/Initial counts "
-            f"({len(groups[dataset])} files)"
-        )
+        raise ValueError(f"Dataset {dataset!r} has no CutFlow/Initial counts ({len(groups[dataset])} files)")
     kfactor = QCD_KFACTOR_BY_YEAR.get(str(year), 1.0)
     if not dataset.startswith(QCD_DATASET_PREFIX):
         kfactor = 1.0
@@ -570,18 +461,7 @@ def dataset_file_groups(file_paths, groups, use_xsec):
     return [(name, grouped[name]) for name in sorted(grouped)]
 
 
-def process_batch_stats(
-    events,
-    role,
-    year,
-    totals,
-    weighted_totals,
-    lumi,
-    weight_ctx,
-    use_xsec,
-    trigger_sf,
-    progress,
-):
+def process_batch_stats(events, role, year, totals, weighted_totals, lumi, weight_ctx, use_xsec, trigger_sf, progress):
     start = time.perf_counter()
     mask = np.asarray(event_cut_mask(events, role, year), dtype=bool)
     n_pass = int(mask.sum())
@@ -623,31 +503,8 @@ def _trim_batch(batch, n_keep):
     return batch[:n_keep], n_keep
 
 
-def _consume_batch(
-    batch,
-    role,
-    year,
-    totals,
-    weighted_totals,
-    progress,
-    lumi,
-    weight_ctx,
-    use_xsec,
-    trigger_sf,
-    bucket_stats,
-):
-    batch_stats = process_batch_stats(
-        batch,
-        role,
-        year,
-        totals,
-        weighted_totals,
-        lumi,
-        weight_ctx,
-        use_xsec,
-        trigger_sf,
-        progress,
-    )
+def _consume_batch(batch, role, year, totals, weighted_totals, progress, lumi, weight_ctx, use_xsec, trigger_sf, bucket_stats):
+    batch_stats = process_batch_stats(batch, role, year, totals, weighted_totals, lumi, weight_ctx, use_xsec, trigger_sf, progress)
     bucket_stats.add_counts(batch_stats)
     if progress is not None:
         progress.batches += 1
@@ -655,46 +512,14 @@ def _consume_batch(
     return bucket_stats
 
 
-def iterate_file_chunks(
-    file_paths,
-    branches,
-    args,
-    progress,
-    role,
-    year,
-    totals,
-    weighted_totals,
-    lumi,
-    weight_ctx,
-    use_xsec,
-    trigger_sf,
-    bucket_stats,
-    entries_read,
-    bar_label="",
-    quiet_override=None,
-):
+def iterate_file_chunks(file_paths, branches, args, progress, role, year, totals, weighted_totals, lumi, weight_ctx, use_xsec, trigger_sf, bucket_stats, entries_read, bar_label="", quiet_override=None):
     """Read with uproot.iterate in chunks; one or many files per inner loop."""
     per_file = args.max_events_per_file is not None
-    file_lists = (
-        [[path] for path in file_paths]
-        if per_file
-        else [list(file_paths)]
-    )
-    uproot_workers = args.uproot_workers
-    if per_file and len(file_paths) > 1:
-        uproot_workers = max(1, uproot_workers)
-    quiet = quiet_override
-    if quiet is None:
-        quiet = progress.quiet if progress is not None else False
+    file_lists = [[path] for path in file_paths] if per_file else [list(file_paths)]
+    uproot_workers = max(1, args.uproot_workers) if (per_file and len(file_paths) > 1) else args.uproot_workers
+    quiet = quiet_override if quiet_override is not None else (progress.quiet if progress is not None else False)
 
-    file_outer = file_lists
-    if per_file and len(file_lists) > 1:
-        file_outer = tqdm(
-            file_lists,
-            desc=f"{bar_label} files",
-            unit="file",
-            disable=quiet,
-        )
+    file_outer = tqdm(file_lists, desc=f"{bar_label} files", unit="file", disable=quiet) if (per_file and len(file_lists) > 1) else file_lists
 
     for file_group in file_outer:
         if args.max_events_total is not None and entries_read >= args.max_events_total:
@@ -702,27 +527,14 @@ def iterate_file_chunks(
 
         paths = [f"{normalize_input_path(p)}:Events" for p in file_group]
         if progress is not None and progress.debug and len(file_lists) > 1:
-            names = ", ".join(os.path.basename(p) for p in file_group[:3])
-            if len(file_group) > 3:
-                names += ", ..."
+            names = ", ".join(os.path.basename(p) for p in file_group[:3]) + (", ..." if len(file_group) > 3 else "")
             print(f"  reading file group ({len(file_group)}): {names}")
 
         file_entries = 0
         read_wait = time.perf_counter()
-        chunk_bar = tqdm(
-            desc=f"{bar_label} chunks",
-            unit="chunk",
-            disable=quiet,
-            leave=False,
-        )
+        chunk_bar = tqdm(desc=f"{bar_label} chunks", unit="chunk", disable=quiet, leave=False)
         try:
-            batch_iter = uproot.iterate(
-                paths,
-                expressions=branches,
-                library="ak",
-                step_size=args.step_size,
-                num_workers=uproot_workers,
-            )
+            batch_iter = uproot.iterate(paths, expressions=branches, library="ak", step_size=args.step_size, num_workers=uproot_workers)
             for batch in batch_iter:
                 if progress is not None:
                     progress.add_read(time.perf_counter() - read_wait)
@@ -746,25 +558,9 @@ def iterate_file_chunks(
                 if progress is not None:
                     progress.entries_read = entries_read
 
-                _consume_batch(
-                    batch,
-                    role,
-                    year,
-                    totals,
-                    weighted_totals,
-                    progress,
-                    lumi,
-                    weight_ctx,
-                    use_xsec,
-                    trigger_sf,
-                    bucket_stats,
-                )
+                _consume_batch(batch, role, year, totals, weighted_totals, progress, lumi, weight_ctx, use_xsec, trigger_sf, bucket_stats)
                 chunk_bar.update(1)
-                chunk_bar.set_postfix(
-                    entries=entries_read,
-                    n_pass=bucket_stats.n_pass,
-                    refresh=False,
-                )
+                chunk_bar.set_postfix(entries=entries_read, n_pass=bucket_stats.n_pass, refresh=False)
 
                 if args.max_events_total is not None and entries_read >= args.max_events_total:
                     break
@@ -774,83 +570,23 @@ def iterate_file_chunks(
     return bucket_stats, entries_read
 
 
-def process_one_file(
-    file_path,
-    role,
-    year,
-    branches,
-    args,
-    lumi,
-    use_xsec,
-    weight_ctx,
-    trigger_sf,
-):
+def process_one_file(file_path, role, year, branches, args, lumi, use_xsec, weight_ctx, trigger_sf):
     totals = {}
     weighted_totals = {}
     stats = BucketStats()
-    iterate_file_chunks(
-        [file_path],
-        branches,
-        args,
-        None,
-        role,
-        year,
-        totals,
-        weighted_totals,
-        lumi,
-        weight_ctx,
-        use_xsec,
-        trigger_sf,
-        stats,
-        0,
-        bar_label="",
-        quiet_override=True,
-    )
+    iterate_file_chunks([file_path], branches, args, None, role, year, totals, weighted_totals, lumi, weight_ctx, use_xsec, trigger_sf, stats, 0, bar_label="", quiet_override=True)
     stats.cutflow = totals
     stats.weighted_cutflow = weighted_totals
-    stats.root_cutflow = read_file_root_cutflow(
-        file_path, allow_missing=(role == "signal")
-    )
+    stats.root_cutflow = read_file_root_cutflow(file_path, allow_missing=(role == "signal"))
     return stats
 
 
-def accumulate_files_threaded(
-    group_files,
-    role,
-    year,
-    branches,
-    args,
-    lumi,
-    use_xsec,
-    weight_ctx,
-    trigger_sf,
-    progress,
-    bar_label,
-):
+def accumulate_files_threaded(group_files, role, year, branches, args, lumi, use_xsec, weight_ctx, trigger_sf, progress, bar_label):
     bucket_stats = BucketStats()
     quiet = progress.quiet if progress is not None else False
-    file_bar = tqdm(
-        total=len(group_files),
-        desc=f"{bar_label} files",
-        unit="file",
-        disable=quiet,
-    )
+    file_bar = tqdm(total=len(group_files), desc=f"{bar_label} files", unit="file", disable=quiet)
     with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        futures = {
-            pool.submit(
-                process_one_file,
-                path,
-                role,
-                year,
-                branches,
-                args,
-                lumi,
-                use_xsec,
-                weight_ctx,
-                trigger_sf,
-            ): path
-            for path in group_files
-        }
+        futures = {pool.submit(process_one_file, path, role, year, branches, args, lumi, use_xsec, weight_ctx, trigger_sf): path for path in group_files}
         for future in as_completed(futures):
             partial = future.result()
             bucket_stats.add_counts(partial)
@@ -861,18 +597,7 @@ def accumulate_files_threaded(
     return bucket_stats
 
 
-def accumulate(
-    file_paths,
-    role,
-    year,
-    groups,
-    args,
-    use_xsec,
-    lumi,
-    trigger_sf,
-    progress=None,
-    bar_label="",
-):
+def accumulate(file_paths, role, year, groups, args, use_xsec, lumi, trigger_sf, progress=None, bar_label=""):
     if not file_paths:
         return BucketStats()
 
@@ -886,71 +611,22 @@ def accumulate(
     debug = progress.debug if progress is not None else False
 
     mc_groups = dataset_file_groups(file_paths, groups, use_xsec)
-    group_outer = mc_groups
-    if use_xsec and len(mc_groups) > 1:
-        group_outer = tqdm(
-            mc_groups,
-            desc=f"{bar_label} MC datasets",
-            unit="dataset",
-            disable=quiet,
-        )
-
-    use_threads = (
-        args.workers > 1
-        and len(file_paths) > 1
-        and args.max_events_total is None
-    )
+    group_outer = tqdm(mc_groups, desc=f"{bar_label} MC datasets", unit="dataset", disable=quiet) if (use_xsec and len(mc_groups) > 1) else mc_groups
+    use_threads = args.workers > 1 and len(file_paths) > 1 and args.max_events_total is None
 
     for group_name, group_files in group_outer:
         weight_ctx = None
         if use_xsec:
-            weight_ctx = mc_weight_context(
-                group_files[0],
-                groups,
-                initial_events_cache,
-                year,
-                progress,
-                debug,
-            )
+            weight_ctx = mc_weight_context(group_files[0], groups, initial_events_cache, year, progress, debug)
 
-        chunk_label = bar_label
-        if use_xsec and len(mc_groups) > 1:
-            chunk_label = f"{bar_label}/{group_name}"
+        chunk_label = f"{bar_label}/{group_name}" if (use_xsec and len(mc_groups) > 1) else bar_label
 
         if use_threads and len(group_files) > 1:
-            partial = accumulate_files_threaded(
-                group_files,
-                role,
-                year,
-                branches,
-                args,
-                lumi,
-                use_xsec,
-                weight_ctx,
-                trigger_sf,
-                progress,
-                chunk_label,
-            )
+            partial = accumulate_files_threaded(group_files, role, year, branches, args, lumi, use_xsec, weight_ctx, trigger_sf, progress, chunk_label)
             bucket_stats.add_counts(partial)
             add_cutflow(totals, partial.cutflow)
         else:
-            bucket_stats, entries_read = iterate_file_chunks(
-                group_files,
-                branches,
-                args,
-                progress,
-                role,
-                year,
-                totals,
-                weighted_totals,
-                lumi,
-                weight_ctx,
-                use_xsec,
-                trigger_sf,
-                bucket_stats,
-                entries_read,
-                bar_label=chunk_label,
-            )
+            bucket_stats, entries_read = iterate_file_chunks(group_files, branches, args, progress, role, year, totals, weighted_totals, lumi, weight_ctx, use_xsec, trigger_sf, bucket_stats, entries_read, bar_label=chunk_label)
 
         if args.max_events_total is not None and entries_read >= args.max_events_total:
             break
@@ -959,10 +635,7 @@ def accumulate(
     add_weighted_cutflow(bucket_stats.weighted_cutflow, weighted_totals)
     if not use_threads:
         for path in file_paths:
-            add_cutflow(
-                bucket_stats.root_cutflow,
-                read_file_root_cutflow(path, allow_missing=(role == "signal")),
-            )
+            add_cutflow(bucket_stats.root_cutflow, read_file_root_cutflow(path, allow_missing=(role == "signal")))
     return bucket_stats
 
 
@@ -1074,28 +747,12 @@ def print_contamination_table(
     for name, stats in sorted(signal_stats_by_name.items()):
         n_sig = stats.n_pass
         phys_sig = physical_yield(stats, "signal", year, lumi)
-        print(
-            f"{name:<36} {n_sig:>8d} {phys_sig:>10.4g} "
-            f"{100.0 * n_sig / n_data:>9.3f}% "
-            f"{100.0 * phys_sig / phys_data:>9.3f}% "
-            f"{100.0 * phys_sig / phys_qcd if phys_qcd else float('nan'):>9.3f}%"
-        )
+        qcd_pct = 100.0 * phys_sig / phys_qcd if phys_qcd else float("nan")
+        print(f"{name:<36} {n_sig:>8d} {phys_sig:>10.4g} {100.0 * n_sig / n_data:>9.3f}% {100.0 * phys_sig / phys_data:>9.3f}% {qcd_pct:>9.3f}%")
 
 
 def bucket_record(bucket, role, stats):
-    return {
-        "bucket": bucket,
-        "role": role,
-        "n_pass": stats.n_pass,
-        "w_pass": stats.w_pass,
-        "n_pre": stats.n_pre,
-        "n_post": stats.n_post,
-        "w_pre": stats.w_pre,
-        "w_post": stats.w_post,
-        "cutflow": stats.cutflow,
-        "root_cutflow": stats.root_cutflow,
-        "weighted_cutflow": stats.weighted_cutflow,
-    }
+    return {"bucket": bucket, "role": role, "n_pass": stats.n_pass, "w_pass": stats.w_pass, "n_pre": stats.n_pre, "n_post": stats.n_post, "w_pre": stats.w_pre, "w_post": stats.w_post, "cutflow": stats.cutflow, "root_cutflow": stats.root_cutflow, "weighted_cutflow": stats.weighted_cutflow}
 
 
 def stats_from_record(record):
@@ -1117,12 +774,7 @@ def stats_from_cache_payload(payload):
 
 
 def cache_eligible(args):
-    return not (
-        args.refresh_cache
-        or args.max_events_per_file
-        or args.max_events_total
-        or args.shard is not None
-    )
+    return not (args.refresh_cache or args.max_events_per_file or args.max_events_total or args.shard is not None)
 
 
 def write_json_output(path, year, records):
@@ -1143,18 +795,7 @@ def merge_json_files(paths):
             key = record["bucket"]
             entry = merged[year].setdefault(
                 key,
-                {
-                    "role": record["role"],
-                    "n_pass": 0,
-                    "w_pass": 0.0,
-                    "n_pre": 0,
-                    "n_post": 0,
-                    "w_pre": 0.0,
-                    "w_post": 0.0,
-                    "cutflow": {},
-                    "root_cutflow": {},
-                    "weighted_cutflow": {},
-                },
+                {"role": record["role"], "n_pass": 0, "w_pass": 0.0, "n_pre": 0, "n_post": 0, "w_pre": 0.0, "w_post": 0.0, "cutflow": {}, "root_cutflow": {}, "weighted_cutflow": {}},
             )
             entry["n_pass"] += int(record["n_pass"])
             entry["w_pass"] += float(record["w_pass"])
@@ -1167,27 +808,32 @@ def merge_json_files(paths):
             if "root_cutflow" in record:
                 add_cutflow(entry["root_cutflow"], record["root_cutflow"])
             if "weighted_cutflow" in record:
-                add_weighted_cutflow(
-                    entry["weighted_cutflow"], record["weighted_cutflow"]
-                )
+                add_weighted_cutflow(entry["weighted_cutflow"], record["weighted_cutflow"])
     return merged
 
 
 def print_year_summary(year, lumi, results, signal_groups):
     print_weighting_note(lumi)
+    results = combine_bkg_results(results)
     data = results.get("data", BucketStats())
     qcd = results.get("qcd", BucketStats())
     print_bucket_yield_table(f"{year} data", data, "data", year, lumi)
     print_bucket_yield_table(f"{year} QCD (pooled HT)", qcd, "background", year, lumi)
-    signal_map = {
-        name: results[name]
-        for name in sorted(signal_groups)
-        if name in results
-    }
+
+    bkg_order = ["TTJets", "WJets", "ZJets"]
+    other_bkgs = [k for k in sorted(results) if k not in ("data", "qcd") and k not in bkg_order and k not in signal_groups]
+    bkg_keys = [k for k in bkg_order if k in results] + other_bkgs
+    for name in bkg_keys:
+        print_bucket_yield_table(f"{year} background {name}", results[name], "background", year, lumi)
+
+    signal_map = {name: results[name] for name in sorted(signal_groups) if name in results}
     for name, stats in signal_map.items():
         short = name.replace("s-channel_", "")
         print_bucket_yield_table(f"{year} signal {short}", stats, "signal", year, lumi)
+
     table_rows = [("Data", data, "data"), ("QCD", qcd, "background")]
+    for name in bkg_keys:
+        table_rows.append((name, results[name], "background"))
     for name, stats in signal_map.items():
         table_rows.append((name.replace("s-channel_", ""), stats, "signal"))
     print_combined_cutflow_table(year, table_rows)
@@ -1199,48 +845,26 @@ def run_merge(args):
     for year in sorted(merged):
         buckets = merged[year]
         lumi = lumi_spec(args, year)
-        results = {
-            key: stats_from_record(entry) for key, entry in buckets.items()
-        }
-        signal_groups = {
-            k: [] for k, v in buckets.items() if v["role"] == "signal"
-        }
+        results = {key: stats_from_record(entry) for key, entry in buckets.items()}
+        signal_groups = {k: [] for k, v in buckets.items() if v["role"] == "signal"}
         print_year_summary(year, lumi, results, signal_groups)
 
 
 def warn_partial_run(args, file_paths):
     if args.max_events_per_file or args.max_events_total or args.shard is not None:
-        print(
-            "WARNING: partial read or shard mode — MC uses full-dataset "
-            "N_initial; W_pass / N_phys are approximate."
-        )
+        print("WARNING: partial read or shard mode — MC uses full-dataset N_initial; W_pass / N_phys are approximate.")
     if len(file_paths) == 0:
         print("WARNING: no files selected for this bucket.")
 
 
-def run_bucket(
-    args,
-    year,
-    bucket,
-    file_paths,
-    groups,
-    role,
-    use_xsec,
-    lumi,
-    trigger_sf,
-    progress,
-    records,
-):
+def run_bucket(args, year, bucket, file_paths, groups, role, use_xsec, lumi, trigger_sf, progress, records):
     if role == "signal":
         file_paths = filter_signal_files(file_paths, quiet=args.quiet)
         if len(groups) == 1:
             dataset_key = next(iter(groups))
             groups = {dataset_key: list(file_paths)}
         if not file_paths:
-            print(
-                f"\n--- {year} {bucket} (0 files) ---\n"
-                f"WARNING: no signal files with CutFlow; skipping bucket"
-            )
+            print(f"\n--- {year} {bucket} (0 files) ---\nWARNING: no signal files with CutFlow; skipping bucket")
             stats = BucketStats()
             records.append(bucket_record(bucket, role, stats))
             return stats
@@ -1248,14 +872,7 @@ def run_bucket(
     print(f"\n--- {year} {bucket} ({len(file_paths)} files) ---")
     cache_key = None
     if cache_eligible(args):
-        cache_key = bucket_cache_key(
-            bucket,
-            year,
-            role,
-            file_paths,
-            cuts_fingerprint(),
-            args.no_trigger_sf,
-        )
+        cache_key = bucket_cache_key(bucket, year, role, file_paths, cuts_fingerprint(), args.no_trigger_sf)
         cached = load_bucket_cache(args.config_dir, cache_key)
         if cached is not None:
             print(f"  Loaded from cache ({cache_key})")
@@ -1263,25 +880,8 @@ def run_bucket(
             records.append(bucket_record(bucket, role, stats))
             return stats
     progress._file_workers = args.workers
-    progress.start_bucket(
-        bucket,
-        len(file_paths),
-        args.step_size,
-        args.uproot_workers,
-        len(read_branches(role, year, use_xsec)),
-    )
-    stats = accumulate(
-        file_paths,
-        role,
-        year,
-        groups,
-        args,
-        use_xsec=use_xsec,
-        lumi=lumi,
-        trigger_sf=trigger_sf,
-        progress=progress,
-        bar_label=bucket,
-    )
+    progress.start_bucket(bucket, len(file_paths), args.step_size, args.uproot_workers, len(read_branches(role, year, use_xsec)))
+    stats = accumulate(file_paths, role, year, groups, args, use_xsec=use_xsec, lumi=lumi, trigger_sf=trigger_sf, progress=progress, bar_label=bucket)
     if cache_key is not None:
         save_bucket_cache(args.config_dir, cache_key, stats)
     records.append(bucket_record(bucket, role, stats))
@@ -1292,19 +892,12 @@ def run_bucket(
 def process_year(args, year):
     year = str(year)
     lumi = lumi_spec(args, year)
-    progress = IoProgress(
-        quiet=args.quiet,
-        debug=args.debug,
-        log_every_batches=args.progress_every,
-    )
+    progress = IoProgress(quiet=args.quiet, debug=args.debug, log_every_batches=args.progress_every)
     trigger_sf = None
     if not args.no_trigger_sf:
         trigger_sf = load_trigger_sf(args.config_dir, year)
         if trigger_sf is None:
-            print(
-                f"  Trigger SF: no file at {trigger_sf_path(args.config_dir, year)}; "
-                "MC weights omit trigger correction"
-            )
+            print(f"  Trigger SF: no file at {trigger_sf_path(args.config_dir, year)}; MC weights omit trigger correction")
 
     data_path = input_json_path(args.config_dir, "data", year)
     signal_path = input_json_path(args.config_dir, "signal", year)
@@ -1313,7 +906,8 @@ def process_year(args, year):
     data_groups = dataset_groups(load_input_json(data_path))
     signal_groups = dataset_groups(load_input_json(signal_path))
     bg_groups = dataset_groups(load_input_json(bg_path))
-    qcd_only = qcd_groups(bg_groups)
+    bkg_families = bkg_family_groups(bg_groups)
+    qcd_only = bkg_families.get("QCD", {})
 
     records = []
     results = {}
@@ -1322,71 +916,33 @@ def process_year(args, year):
         return args.bucket is None or args.bucket == name
 
     if should_run("data"):
-        files = select_shard(
-            flat_files(data_groups), args.files_per_job, args.shard
-        )
-        results["data"] = run_bucket(
-            args,
-            year,
-            "data",
-            files,
-            data_groups,
-            "data",
-            False,
-            lumi,
-            trigger_sf,
-            progress,
-            records,
-        )
+        files = select_shard(flat_files(data_groups), args.files_per_job, args.shard)
+        results["data"] = run_bucket(args, year, "data", files, data_groups, "data", False, lumi, trigger_sf, progress, records)
 
-    if should_run("qcd"):
-        files = select_shard(flat_files(qcd_only), args.files_per_job, args.shard)
-        results["qcd"] = run_bucket(
-            args,
-            year,
-            "qcd",
-            files,
-            qcd_only,
-            "background",
-            True,
-            lumi,
-            trigger_sf,
-            progress,
-            records,
-        )
+    if should_run("qcd") or (args.bucket is not None and args.bucket in qcd_only):
+        qcd_target_groups = {args.bucket: qcd_only[args.bucket]} if (args.bucket and args.bucket in qcd_only) else qcd_only
+        bucket_label = args.bucket if (args.bucket and args.bucket in qcd_only) else "qcd"
+        files = select_shard(flat_files(qcd_target_groups), args.files_per_job, args.shard)
+        results[bucket_label] = run_bucket(args, year, bucket_label, files, qcd_target_groups, "background", True, lumi, trigger_sf, progress, records)
 
-    if args.bucket is None or args.bucket not in ("data", "qcd"):
-        signal_names = [
-            name
-            for name in sorted(signal_groups)
-            if args.bucket is None or args.bucket == name
-        ]
-        signal_outer = signal_names
-        if len(signal_names) > 1:
-            signal_outer = tqdm(
-                signal_names,
-                desc=f"{year} signal points",
-                unit="point",
-                disable=args.quiet,
-            )
+    for bkg_name in sorted(bkg_families):
+        if bkg_name == "QCD":
+            continue
+        fam_groups = bkg_families[bkg_name]
+        is_subdataset = args.bucket is not None and args.bucket in fam_groups
+        if args.bucket is None or args.bucket == bkg_name or is_subdataset:
+            target_groups = {args.bucket: fam_groups[args.bucket]} if is_subdataset else fam_groups
+            bucket_label = args.bucket if is_subdataset else bkg_name
+            files = select_shard(flat_files(target_groups), args.files_per_job, args.shard)
+            results[bucket_label] = run_bucket(args, year, bucket_label, files, target_groups, "background", True, lumi, trigger_sf, progress, records)
+
+    if args.bucket is None or args.bucket in signal_groups:
+        signal_names = [name for name in sorted(signal_groups) if args.bucket is None or args.bucket == name]
+        signal_outer = tqdm(signal_names, desc=f"{year} signal points", unit="point", disable=args.quiet) if len(signal_names) > 1 else signal_names
         for dataset_name in signal_outer:
-            files = select_shard(
-                signal_groups[dataset_name], args.files_per_job, args.shard
-            )
+            files = select_shard(signal_groups[dataset_name], args.files_per_job, args.shard)
             groups = {dataset_name: files}
-            results[dataset_name] = run_bucket(
-                args,
-                year,
-                dataset_name,
-                files,
-                groups,
-                "signal",
-                True,
-                lumi,
-                trigger_sf,
-                progress,
-                records,
-            )
+            results[dataset_name] = run_bucket(args, year, dataset_name, files, groups, "signal", True, lumi, trigger_sf, progress, records)
 
     if args.output_json:
         write_json_output(args.output_json, year, records)
@@ -1397,62 +953,22 @@ def process_year(args, year):
 
     print_year_summary(year, lumi, results, signal_groups)
 
-    if args.background:
-        for dataset_name in sorted(bg_groups):
-            if dataset_name.startswith(QCD_DATASET_PREFIX):
-                continue
-            files = bg_groups[dataset_name]
-            if not files:
-                continue
-            groups = {dataset_name: files}
-            print(f"\n--- {year} background / {dataset_name} ({len(files)} files) ---")
-            progress._file_workers = args.workers
-            progress.start_bucket(
-                dataset_name,
-                len(files),
-                args.step_size,
-                args.uproot_workers,
-                len(read_branches("background", year, False)),
-            )
-            stats = accumulate(
-                files,
-                "background",
-                year,
-                groups,
-                args,
-                use_xsec=False,
-                lumi=lumi,
-                trigger_sf=None,
-                progress=progress,
-                bar_label=dataset_name,
-            )
-            progress.report(dataset_name)
-            print_bucket_yield_table(
-                f"{year} background {dataset_name}",
-                stats,
-                "background",
-                year,
-                lumi,
-            )
-
 
 def contamination_buckets(config_dir, year):
     """(sample_label, bucket, file_paths) for Condor queue generation."""
     year = str(year)
-    data_groups = dataset_groups(
-        load_input_json(input_json_path(config_dir, "data", year))
-    )
-    signal_groups = dataset_groups(
-        load_input_json(input_json_path(config_dir, "signal", year))
-    )
-    bg_groups = dataset_groups(
-        load_input_json(input_json_path(config_dir, "background", year))
-    )
-    qcd_only = qcd_groups(bg_groups)
+    data_groups = dataset_groups(load_input_json(input_json_path(config_dir, "data", year)))
+    signal_groups = dataset_groups(load_input_json(input_json_path(config_dir, "signal", year)))
+    bg_groups = dataset_groups(load_input_json(input_json_path(config_dir, "background", year)))
+    bkg_families = bkg_family_groups(bg_groups)
     items = [
         (f"{year}__data", "data", flat_files(data_groups)),
-        (f"{year}__qcd", "qcd", flat_files(qcd_only)),
+        (f"{year}__qcd", "qcd", flat_files(bkg_families.get("QCD", {}))),
     ]
+    for bkg_name in sorted(bkg_families):
+        if bkg_name == "QCD":
+            continue
+        items.append((f"{year}__{bkg_name}", bkg_name, flat_files(bkg_families[bkg_name])))
     for name, files in sorted(signal_groups.items()):
         items.append((f"{year}__{name}", name, list(files)))
     return items
