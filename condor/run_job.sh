@@ -28,12 +28,6 @@ if [ -n "${GAE_OUTPUT_EOS}" ] && [ -d "${GAE_OUTPUT_EOS}" ]; then
             ln -sfn "${GAE_OUTPUT_EOS}/${d}" "${d}"
         fi
     done
-    if [ -d "${GAE_OUTPUT_EOS}/data" ] && [ ! -e "data_aimar" ]; then
-        ln -sfn "${GAE_OUTPUT_EOS}/data" data_aimar
-    fi
-    if [ -d "${GAE_OUTPUT_EOS}/data_aimar" ] && [ ! -e "data" ]; then
-        ln -sfn "${GAE_OUTPUT_EOS}/data_aimar" data
-    fi
 fi
 
 if [[ " $* " =~ " --comet " ]]; then
@@ -108,8 +102,10 @@ if [ -n "${GAE_OUTPUT_EOS}" ]; then
                 xrdcp -f "${file}" "${GAE_OUTPUT_EOS}/${file}"
             else
                 dest="${GAE_OUTPUT_EOS}/${file}"
-                mkdir -p "$(dirname "${dest}")"
-                cp -f "${file}" "${dest}"
+                if [ "$(realpath "${file}" 2>/dev/null)" != "$(realpath "${dest}" 2>/dev/null)" ]; then
+                    mkdir -p "$(dirname "${dest}")" || true
+                    cp -f "${file}" "${dest}" || (sleep 2 && cp -f "${file}" "${dest}")
+                fi
             fi
         done
     fi

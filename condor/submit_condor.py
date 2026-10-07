@@ -32,12 +32,16 @@ from utils.InputJson import shard_files  # noqa: E402
 TAR_EXCLUDES = (
     ".git",
     ".venv-gae",
-    "data",
-    "scores",
-    "output_scores",
-    "plots",
-    "training",
-    "condor/logs",
+    "SVJ_GNN/data",
+    "SVJ_GNN/data_aimar",
+    "SVJ_GNN/scores",
+    "SVJ_GNN/output_scores",
+    "SVJ_GNN/output_scores_aimar",
+    "SVJ_GNN/plots",
+    "SVJ_GNN/plots_aimar",
+    "SVJ_GNN/training",
+    "SVJ_GNN/training_aimar",
+    "SVJ_GNN/condor/logs",
     "*.ipynb",
     "*.root",
     "__pycache__",
@@ -171,6 +175,25 @@ def parse_arguments():
         help="Custom run name for training output checkpoints and logs (train stage only)",
     )
     parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="auto",
+        default=None,
+        help="Resume training: 'auto' (default if flag given without value) or path to checkpoint file (train stage only)",
+    )
+    parser.add_argument(
+        "--add-epochs",
+        type=int,
+        default=None,
+        help="Number of additional epochs to train beyond checkpoint recorded epoch (train stage only)",
+    )
+    parser.add_argument(
+        "--save-every-n-epochs",
+        type=int,
+        default=None,
+        help="Frequency of saving checkpoint_latest.pt during training (train stage only)",
+    )
+    parser.add_argument(
         "--job-arguments",
         default="",
         help="Extra arguments appended to the stage's python command",
@@ -246,6 +269,13 @@ def job_arguments(args, config):
             pieces.append("--no-comet")
         if args.seed is not None and not args.seeds:
             pieces.append(f"--seed {args.seed}")
+        if args.resume is not None and "--resume" not in args.job_arguments:
+            pieces.append(f"--resume {args.resume}" if args.resume != "auto" else "--resume")
+            print(f"Training resume mode: {args.resume}")
+        if args.add_epochs is not None and "--add-epochs" not in args.job_arguments:
+            pieces.append(f"--add-epochs {args.add_epochs}")
+        if args.save_every_n_epochs is not None and "--save-every-n-epochs" not in args.job_arguments:
+            pieces.append(f"--save-every-n-epochs {args.save_every_n_epochs}")
     elif args.stage == "score":
         pieces = [f"--config {args.config}", f"--files-per-job {args.files_per_job}"]
         ckpt_path = config.find_checkpoint(
@@ -267,6 +297,40 @@ def job_arguments(args, config):
     return " ".join(pieces)
 
 
+def prepare_output_directories(args, config):
+    """Pre-create destination directories before submitting batch jobs to prevent worker race conditions."""
+    base_dir = args.eos_dir if args.output_location == "eos" else "."
+
+    if args.stage == "produce":
+        prod_dir = config.production.get("output_dir", "data")
+        samples = config.select(args.samples)
+        for sample in samples:
+            target_processed = os.path.join(base_dir, prod_dir, sample.name, "processed")
+            os.makedirs(target_processed, exist_ok=True)
+            print(f"Pre-created directory: {target_processed}")
+    elif args.stage == "score":
+        scoring_dir = config.scoring.get("output_dir", "output_scores")
+        target_dir = os.path.join(base_dir, scoring_dir)
+        os.makedirs(target_dir, exist_ok=True)
+        print(f"Pre-created directory: {target_dir}")
+    elif args.stage == "train":
+        train_dir = config.training.get("output_dir", "training")
+        run_name = args.run_name or config.model.spec.replace(".", "_")
+        if args.seeds:
+            for seed in args.seeds:
+                target_dir = os.path.join(base_dir, train_dir, f"{run_name}_seed{seed}")
+                os.makedirs(target_dir, exist_ok=True)
+                print(f"Pre-created directory: {target_dir}")
+        elif args.seed is not None:
+            target_dir = os.path.join(base_dir, train_dir, f"{run_name}_seed{args.seed}")
+            os.makedirs(target_dir, exist_ok=True)
+            print(f"Pre-created directory: {target_dir}")
+        else:
+            target_dir = os.path.join(base_dir, train_dir, run_name)
+            os.makedirs(target_dir, exist_ok=True)
+            print(f"Pre-created directory: {target_dir}")
+
+
 def main():
     args = parse_arguments()
     config = load_config(os.path.join(SVJ_GNN_DIR, args.config))
@@ -279,6 +343,7 @@ def main():
     os.makedirs(args.log_dir, exist_ok=True)
     stage_log_dir = os.path.join(args.log_dir, args.stage)
     os.makedirs(stage_log_dir, exist_ok=True)
+    prepare_output_directories(args, config)
 
     tarball = os.path.join(args.submit_dir, "SVJ_GNN.tar.gz")
     if not args.skip_tarball:

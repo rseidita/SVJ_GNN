@@ -261,6 +261,7 @@ def main():
         if args.resume == "auto":
             candidates = [
                 os.path.join(output_dir, "checkpoint_latest.pt"),
+                os.path.join(output_dir, "checkpoint_best.pt"),
                 os.path.join(output_dir, "checkpoint.pt"),
             ]
             resume_path = next((p for p in candidates if os.path.exists(p)), None)

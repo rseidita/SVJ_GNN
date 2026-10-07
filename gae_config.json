@@ -79,6 +79,21 @@
       "weights": "xsec",
       "label": 0
     },
+    "qcd_2017": {
+      "role": "background",
+      "year": "2017",
+      "input_json": "inputJson/background/2017_background.json",
+      "datasets": [
+        "QCD_HT300to500",
+        "QCD_HT500to700",
+        "QCD_HT700to1000",
+        "QCD_HT1000to1500",
+        "QCD_HT1500to2000",
+        "QCD_HT2000toInf"
+      ],
+      "weights": "xsec",
+      "label": 0
+    },
     "qcd_2018": {
       "role": "background",
       "year": "2018",
