@@ -149,7 +149,9 @@ def start_experiment(config, settings, samples, args):
         )
         return None
     try:
+        api_key = os.environ.get("COMET_API_KEY", "8pkRGAjV7ZfkZfIKjdQQPCQuT")
         experiment = comet_ml.Experiment(
+            api_key=api_key,
             project_name=config.training.get("comet_project", "svj-gae"),
         )
     except Exception as error:
