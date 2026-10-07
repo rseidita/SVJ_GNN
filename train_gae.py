@@ -127,10 +127,10 @@ def resolve_training_samples(config, args):
                 "data sample to train on"
             )
     for sample in samples:
-        if sample.role != "data":
+        if sample.role not in ("data", "background"):
             raise ValueError(
                 f"Cannot train on {sample.name!r} (role={sample.role!r}). "
-                "The autoencoder is trained only on data in the control "
+                "The autoencoder is trained only on data and background in the control "
                 "region. Score background and signal with score_gae.py for "
                 "discrimination plots."
             )
