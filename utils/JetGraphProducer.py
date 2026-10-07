@@ -218,8 +218,8 @@ class JetGraphProducer(Dataset):
         self.event_batch_size = int(event_batch_size)
         # Compatibility aliases for external code.
         self.chunk_size = self.graphs_per_chunk
-        self.processing_batch_size = self.event_batch_size
-        self._n_cached_chunks = n_cached_chunks
+        cache_env = os.environ.get("GAE_CHUNK_CACHE_SIZE")
+        self._n_cached_chunks = int(cache_env) if cache_env else (50 if n_cached_chunks == 2 else n_cached_chunks)
         self.validate_cache_config = validate_cache_config
         self.num_workers = int(num_workers)
         self.worker_prefetch = int(worker_prefetch)

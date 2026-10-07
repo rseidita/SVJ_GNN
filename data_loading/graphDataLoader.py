@@ -447,6 +447,8 @@ class GraphDataLoader(DataLoader):
         self.permutation = compatibility_permutations
         self.sampling = sampling
         self.jet_idx = jet_idx
+        if "pin_memory" not in kwargs:
+            kwargs["pin_memory"] = torch.cuda.is_available()
 
         super().__init__(
             dataset=combined_dataset,

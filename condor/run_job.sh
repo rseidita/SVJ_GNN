@@ -23,7 +23,7 @@ cd SVJ_GNN
 source setup_gae_env.sh
 
 if [ -n "${GAE_OUTPUT_EOS}" ] && [ -d "${GAE_OUTPUT_EOS}" ]; then
-    for d in data data_aimar; do
+    for d in $(ls "${GAE_OUTPUT_EOS}" 2>/dev/null); do
         if [ -d "${GAE_OUTPUT_EOS}/${d}" ] && [ ! -e "${d}" ]; then
             ln -sfn "${GAE_OUTPUT_EOS}/${d}" "${d}"
         fi

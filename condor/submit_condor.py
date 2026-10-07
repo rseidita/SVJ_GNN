@@ -95,7 +95,7 @@ def parse_arguments():
     parser.add_argument("--submit-dir", default=os.path.join(CONDOR_DIR, "submit"))
     parser.add_argument("--log-dir", default=os.path.join(CONDOR_DIR, "logs"))
     parser.add_argument("--request-cpus", type=int, default=1)
-    parser.add_argument("--request-memory", default="4 GB")
+    parser.add_argument("--request-memory", default="8 GB")
     parser.add_argument("--request-disk", default="4 GB")
     parser.add_argument(
         "--request-gpus",
@@ -103,6 +103,17 @@ def parse_arguments():
         default=None,
         help="Request GPUs; defaults to 1 for train stage",
     )
+    parser.add_argument(
+        "--min-gpu-memory",
+        type=int,
+        default=30000,
+        help="Minimum GPU VRAM in MB (default: 30000 MB to target 31.7 GB+ V100/A100/H100)",
+    )
+    parser.add_argument("--batch-size", type=int, default=None, help="Batch size for training")
+    parser.add_argument("--learning-rate", type=float, default=None, help="Learning rate for training")
+    parser.add_argument("--epochs", type=int, default=None, help="Total epochs for training")
+    parser.add_argument("--amp", action="store_true", default=None, help="Enable Automatic Mixed Precision (AMP)")
+    parser.add_argument("--no-amp", action="store_true", default=None, help="Disable Automatic Mixed Precision (AMP)")
     parser.add_argument(
         "--job-flavour",
         default="workday",
@@ -150,6 +161,11 @@ def parse_arguments():
         help="Explicitly disable Comet ML tracking for training jobs",
     )
     parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Checkpoint path for scoring stage (defaults to previous train stage output location)",
+    )
+    parser.add_argument(
         "--run-name",
         default=None,
         help="Custom run name for training output checkpoints and logs (train stage only)",
@@ -160,6 +176,7 @@ def parse_arguments():
         help="Extra arguments appended to the stage's python command",
     )
     parser.add_argument("--skip-tarball", action="store_true")
+    parser.add_argument("--dry-run", action="store_true", help="Generate submit JDL and tarball without calling condor_submit")
     return parser.parse_args()
 
 
@@ -202,7 +219,7 @@ def queue_items(args, config):
     return items
 
 
-def job_arguments(args):
+def job_arguments(args, config):
     """Arguments appended after the stage, sample and shard."""
     if args.stage == "train":
         pieces = [f"--config {args.config}"]
@@ -212,12 +229,34 @@ def job_arguments(args):
             pieces.append(f"--data-dir {args.eos_dir}")
         if args.run_name and "--run-name" not in args.job_arguments:
             pieces.append(f"--run-name {args.run_name}")
+        if args.batch_size is not None and "--batch-size" not in args.job_arguments:
+            pieces.append(f"--batch-size {args.batch_size}")
+        if args.learning_rate is not None and "--learning-rate" not in args.job_arguments:
+            pieces.append(f"--learning-rate {args.learning_rate}")
+        if args.epochs is not None and "--epochs" not in args.job_arguments:
+            pieces.append(f"--epochs {args.epochs}")
+        if args.amp and "--amp" not in args.job_arguments:
+            pieces.append("--amp")
+        if args.no_amp and "--no-amp" not in args.job_arguments:
+            pieces.append("--no-amp")
         if args.comet and "--comet" not in args.job_arguments:
             pieces.append("--comet")
         if args.no_comet and "--no-comet" not in args.job_arguments:
             pieces.append("--no-comet")
         if args.seed is not None and not args.seeds:
             pieces.append(f"--seed {args.seed}")
+    elif args.stage == "score":
+        pieces = [f"--config {args.config}", f"--files-per-job {args.files_per_job}"]
+        ckpt_path = config.find_checkpoint(
+            args.checkpoint,
+            run_name=args.run_name,
+            seed=args.seed,
+            base_dir=args.eos_dir if args.output_location == "eos" else None,
+        )
+        if ckpt_path and "--checkpoint" not in args.job_arguments:
+            pieces.append(f"--checkpoint {ckpt_path}")
+        if args.run_name and "--run-name" not in args.job_arguments:
+            pieces.append(f"--run-name {args.run_name}")
     else:
         pieces = [f"--config {args.config}", f"--files-per-job {args.files_per_job}"]
     if args.job_arguments:
@@ -235,6 +274,8 @@ def main():
 
     os.makedirs(args.submit_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
+    stage_log_dir = os.path.join(args.log_dir, args.stage)
+    os.makedirs(stage_log_dir, exist_ok=True)
 
     tarball = os.path.join(args.submit_dir, "SVJ_GNN.tar.gz")
     if not args.skip_tarball:
@@ -244,8 +285,12 @@ def main():
         template = template_file.read()
 
     num_gpus = args.request_gpus if args.request_gpus is not None else (1 if args.stage == "train" else 0)
+    min_gpu_mem = args.min_gpu_memory
     gpu_requirement = (
-        f"request_gpus           = {num_gpus}\nrequirements            = (TARGET.GPUs_Capability >= 7.0)"
+        f"request_gpus           = {num_gpus}\n"
+        f"requirements            = (TARGET.GPUs_Capability >= 7.0)"
+        + (f" && (TARGET.GPUs_GlobalMemoryMb >= {min_gpu_mem})" if min_gpu_mem else "")
+        + f"\nRank                    = TARGET.GPUs_Capability * 1000 + TARGET.GPUs_GlobalMemoryMb"
         if num_gpus
         else "# no GPU requested"
     )
@@ -275,7 +320,7 @@ def main():
         ("GPU_REQUIREMENT", gpu_requirement),
         ("JOB_FLAVOUR", args.job_flavour),
         ("ENVIRONMENT_SETTING", env_setting),
-        ("JOB_ARGUMENTS", job_arguments(args)),
+        ("JOB_ARGUMENTS", job_arguments(args, config)),
         ("QUEUE_ITEMS", "\n".join(queue_items(args, config))),
     ):
         submit_file = submit_file.replace(placeholder, value)
@@ -286,7 +331,10 @@ def main():
 
     print(f"Wrote {submit_path}")
     print(f"Submit it with: condor_submit {submit_path}")
-    subprocess.run(["condor_submit", submit_path], check=True)
+    if not args.dry_run:
+        subprocess.run(["condor_submit", submit_path], check=True)
+    else:
+        print("[dry-run] JDL generated successfully. Condor submission skipped.")
 
 
 if __name__ == "__main__":

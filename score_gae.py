@@ -51,7 +51,14 @@ import torch
 def parse_arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", default="gae_config.json")
-    parser.add_argument("--checkpoint", required=True)
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Path to trained autoencoder checkpoint (.pt); defaults to train stage output location",
+    )
+    parser.add_argument("--run-name", default=None, help="Training run name to score")
+    parser.add_argument("--seed", type=int, default=None, help="Training seed to score")
+    parser.add_argument("--data-dir", default=None, help="Directory containing dataset and training directories")
     parser.add_argument(
         "--samples",
         nargs="+",
@@ -171,7 +178,15 @@ def main():
     config = load_config(args.config)
     verbose = not args.quiet
 
-    checkpoint = torch.load(args.checkpoint, weights_only=False)
+    checkpoint_path = config.find_checkpoint(
+        args.checkpoint,
+        run_name=args.run_name,
+        seed=args.seed,
+        base_dir=args.data_dir,
+    )
+    checkpoint = torch.load(checkpoint_path, weights_only=False)
+    print(f"Model: {checkpoint['model_spec']}")
+    print(f"Model checkpoint path: {checkpoint_path}")
     device = torch.device(
         args.device
         if args.device is not None
@@ -183,10 +198,7 @@ def main():
         **checkpoint["model_kwargs"],
     )
     model.load_state_dict(checkpoint["state_dict"])
-    print(
-        f"Loaded {checkpoint['model_spec']} with "
-        f"{checkpoint['num_features']} node features on {device}"
-    )
+    print(f"Loaded {checkpoint['model_spec']} with {checkpoint['num_features']} node features on {device} from '{checkpoint_path}'")
 
     graph_settings = checkpoint["graph"]
     max_jets = graph_settings.get("n_store_jets")
