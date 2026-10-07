@@ -237,7 +237,7 @@ def main():
 
     num_gpus = args.request_gpus if args.request_gpus is not None else (1 if args.stage == "train" else 0)
     gpu_requirement = (
-        f"request_gpus           = {num_gpus}"
+        f"request_gpus           = {num_gpus}\nrequirements            = (TARGET.GPUs_Capability >= 7.0)"
         if num_gpus
         else "# no GPU requested"
     )
@@ -278,6 +278,7 @@ def main():
 
     print(f"Wrote {submit_path}")
     print(f"Submit it with: condor_submit {submit_path}")
+    subprocess.run(["condor_submit", submit_path], check=True)
 
 
 if __name__ == "__main__":

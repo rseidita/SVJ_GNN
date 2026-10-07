@@ -464,19 +464,13 @@ def main():
             print(message)
 
             if experiment is not None:
-                experiment.log_metric("train_total", train_losses[0], epoch=epoch)
-                experiment.log_metric("train_edges", train_losses[1], epoch=epoch)
-                experiment.log_metric("train_nodes", train_losses[2], epoch=epoch)
+                experiment.log_metric("train_total", train_losses[0], epoch=epoch, step=epoch)
+                experiment.log_metric("train_edges", train_losses[1], epoch=epoch, step=epoch)
+                experiment.log_metric("train_nodes", train_losses[2], epoch=epoch, step=epoch)
                 if validation_losses is not None:
-                    experiment.log_metric(
-                        "validation_total", validation_losses[0], epoch=epoch
-                    )
-                    experiment.log_metric(
-                        "validation_edges", validation_losses[1], epoch=epoch
-                    )
-                    experiment.log_metric(
-                        "validation_nodes", validation_losses[2], epoch=epoch
-                    )
+                    experiment.log_metric("validation_total", validation_losses[0], epoch=epoch, step=epoch)
+                    experiment.log_metric("validation_edges", validation_losses[1], epoch=epoch, step=epoch)
+                    experiment.log_metric("validation_nodes", validation_losses[2], epoch=epoch, step=epoch)
 
             if (epoch + 1 - start_epoch) % args.save_every_n_epochs == 0 or (epoch + 1 == total_epochs):
                 save_checkpoint(
