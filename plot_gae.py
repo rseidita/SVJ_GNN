@@ -81,28 +81,29 @@ def read_scores(path):
     return arrays["score"], arrays["weight"]
 
 
-def signal_label(sample):
+def signal_label(sample, include_year=False):
     """Short legend label: the dataset name for per-dataset signal samples."""
     if sample.datasets and len(sample.datasets) == 1:
-        return sample.datasets[0].replace("s-channel_", "")
+        tag = sample.datasets[0].replace("s-channel_", "")
+        if include_year and getattr(sample, "year", None):
+            return f"{tag} ({sample.year})"
+        return tag
     return sample.name
 
 
 def score_glob_for_sample(sample):
     """Glob pattern for per-file outputs under ``output_scores/``."""
     if sample.role == "data":
-        return "data_part-*.root"
+        return f"{sample.name}_*.root"
     if sample.role == "background":
-        return "qcd_part-*.root"
+        clean_s = sample.name.replace("background_", "").replace("qcd_", "")
+        return f"qcd_{clean_s}_*.root" if clean_s else "qcd_*.root"
     if sample.role == "signal" and sample.datasets and len(sample.datasets) == 1:
         basename = score_output_basename(
-            sample.role,
-            "part-0.root",
-            sample_name=sample.name,
-            dataset=sample.datasets[0],
+            sample.role, "part-0.root", sample_name=sample.name, dataset=sample.datasets[0]
         )
         return basename.replace("part-0.root", "part-*.root")
-    return f"{sample.name}.root"
+    return f"{sample.name}*.root"
 
 
 def score_paths_for_sample(scores_dir, sample):
@@ -110,14 +111,30 @@ def score_paths_for_sample(scores_dir, sample):
     if os.path.exists(legacy):
         return [legacy]
     pattern = os.path.join(scores_dir, score_glob_for_sample(sample))
-    return sorted(glob.glob(pattern))
+    paths = sorted(glob.glob(pattern))
+    if paths:
+        return paths
+    if sample.role == "data":
+        fallback = sorted(glob.glob(os.path.join(scores_dir, "data_part-*.root")))
+        if fallback:
+            return fallback
+    elif sample.role == "background":
+        fallback = sorted(glob.glob(os.path.join(scores_dir, "qcd_part-*.root")))
+        if fallback:
+            return fallback
+    elif sample.role == "signal" and sample.datasets and len(sample.datasets) == 1:
+        tag = sample.datasets[0].replace("s-channel_", "")
+        fallback = sorted(glob.glob(os.path.join(scores_dir, f"signal_{tag}_part-*.root")))
+        if fallback:
+            return fallback
+    return []
 
 
 def overlay_group_key(stem):
     """Key for combining ``*_part-N.root`` files into one plot series."""
-    if stem.startswith("data_part-"):
+    if stem.startswith("data_part-") or stem.startswith("data_") or stem.startswith("smoke_"):
         return "data"
-    if stem.startswith("qcd_part-"):
+    if stem.startswith("qcd_part-") or stem.startswith("qcd_") or stem.startswith("background_"):
         return "qcd"
     if stem.startswith("signal_") and "_part-" in stem:
         return stem.rsplit("_part-", 1)[0]
@@ -125,9 +142,9 @@ def overlay_group_key(stem):
 
 
 def role_for_overlay_key(key):
-    if key == "data":
+    if key == "data" or key.startswith("data_") or key.startswith("smoke"):
         return "data"
-    if key == "qcd":
+    if key == "qcd" or key.startswith("qcd_") or key.startswith("background_"):
         return "background"
     if key.startswith("signal_"):
         return "signal"
@@ -315,10 +332,12 @@ def main():
         print("Wrote histograms.root")
 
         if args.samples:
+            sig_samples = [config.sample(name) for name in overlays if name in config.samples and config.sample(name).role == "signal"]
+            multi_year = len({getattr(s, "year", None) for s in sig_samples if getattr(s, "year", None)}) > 1
             signals = {
-                signal_label(config.sample(name)): overlays[name]
+                signal_label(config.sample(name), include_year=multi_year): overlays[name]
                 for name in overlays
-                if config.sample(name).role == "signal"
+                if name in config.samples and config.sample(name).role == "signal"
             }
         else:
             signals = {

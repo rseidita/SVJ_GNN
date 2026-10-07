@@ -57,27 +57,56 @@ def part_index(file_path):
 def score_output_basename(role, file_path, sample_name=None, dataset=None):
     """Local score filename for one input ROOT file.
 
-    Examples: ``data_part-0.root``, ``qcd_part-0.root``,
-    ``signal_mMed-1000_mDark-20_rinv-0.3_part-0.root``.
+    Examples:
+      Legacy / minimal:
+        ``data_part-0.root``, ``qcd_part-0.root``,
+        ``signal_mMed-1000_mDark-20_rinv-0.3_part-0.root``
+      Disambiguated (when dataset and/or sample_name provided):
+        ``data_2018_Run2018A_part-0.root``, ``qcd_2018_QCD_HT500to700_part-0.root``,
+        ``signal_2018_mMed-1000_mDark-20_rinv-0.3_part-0.root``
     """
     part = part_index(file_path)
     if role == "data":
-        prefix = "data"
+        if sample_name and dataset:
+            prefix = f"{sample_name}_{dataset}"
+        elif dataset:
+            prefix = f"data_{dataset}"
+        elif sample_name:
+            prefix = sample_name
+        else:
+            prefix = "data"
     elif role == "background":
-        prefix = "qcd"
+        if sample_name and dataset:
+            clean_s = sample_name.replace("background_", "").replace("qcd_", "")
+            prefix = f"qcd_{clean_s}_{dataset}" if clean_s else f"qcd_{dataset}"
+        elif dataset:
+            prefix = f"qcd_{dataset}"
+        elif sample_name:
+            prefix = f"qcd_{sample_name}"
+        else:
+            prefix = "qcd"
     elif role == "signal":
-        tag = None
-        if sample_name:
-            for stem in ("signal_2018_s-channel_", "signal_2017_s-channel_"):
-                if sample_name.startswith(stem):
-                    tag = sample_name[len(stem):]
-                    break
-        if tag is None and dataset:
+        if dataset:
             tag = dataset.replace("s-channel_", "")
-        prefix = f"signal_{tag}" if tag else "signal"
+            year = None
+            if sample_name:
+                for y in ("2018", "2017", "2016"):
+                    if y in sample_name:
+                        year = y
+                        break
+            prefix = f"signal_{year}_{tag}" if year else f"signal_{tag}"
+        else:
+            tag = None
+            if sample_name:
+                for stem in ("signal_2018_s-channel_", "signal_2017_s-channel_"):
+                    if sample_name.startswith(stem):
+                        tag = sample_name[len(stem):]
+                        break
+            prefix = f"signal_{tag}" if tag else "signal"
     else:
         prefix = role
     return f"{prefix}_part-{part}.root"
+
 
 
 def load_input_json(path):

@@ -119,6 +119,37 @@ class TestInputJson(unittest.TestCase):
             "signal_mMed-1000_mDark-20_rinv-0.3_part-7.root",
         )
 
+    def test_score_output_basename_disambiguates_multi_dataset_and_years(self):
+        remote = "root://host//store/part-7.root"
+        data_2018a = score_output_basename("data", remote, sample_name="data_2018", dataset="Run2018A")
+        data_2018b = score_output_basename("data", remote, sample_name="data_2018", dataset="Run2018B")
+        data_2017b = score_output_basename("data", remote, sample_name="data_2017", dataset="Run2017B")
+        self.assertEqual(data_2018a, "data_2018_Run2018A_part-7.root")
+        self.assertEqual(data_2018b, "data_2018_Run2018B_part-7.root")
+        self.assertEqual(data_2017b, "data_2017_Run2017B_part-7.root")
+        self.assertEqual(len({data_2018a, data_2018b, data_2017b}), 3)
+
+        qcd_2018 = score_output_basename("background", remote, sample_name="background_2018", dataset="QCD_HT500to700")
+        qcd_2017 = score_output_basename("background", remote, sample_name="background_2017", dataset="QCD_HT500to700")
+        self.assertEqual(qcd_2018, "qcd_2018_QCD_HT500to700_part-7.root")
+        self.assertEqual(qcd_2017, "qcd_2017_QCD_HT500to700_part-7.root")
+        self.assertNotEqual(qcd_2018, qcd_2017)
+
+        sig_2018 = score_output_basename(
+            "signal", remote,
+            sample_name="signal_2018_s-channel_mMed-1000_mDark-20_rinv-0.3",
+            dataset="s-channel_mMed-1000_mDark-20_rinv-0.3"
+        )
+        sig_2017 = score_output_basename(
+            "signal", remote,
+            sample_name="signal_2017_s-channel_mMed-1000_mDark-20_rinv-0.3",
+            dataset="s-channel_mMed-1000_mDark-20_rinv-0.3"
+        )
+        self.assertEqual(sig_2018, "signal_2018_mMed-1000_mDark-20_rinv-0.3_part-7.root")
+        self.assertEqual(sig_2017, "signal_2017_mMed-1000_mDark-20_rinv-0.3_part-7.root")
+        self.assertNotEqual(sig_2018, sig_2017)
+
+
     def test_resolve_file_selection_normalizes_xrootd_paths(self):
         paths = [
             "root://host/store/a.root",
@@ -452,6 +483,56 @@ class TestFileListGraphProducer(unittest.TestCase):
                 FileListGraphProducer(
                     directory, "dataset", file_paths=[], role="data", year="2018"
                 )
+
+
+class TestMultiYearAndDisambiguatedScoring(unittest.TestCase):
+    def test_multi_year_scoring_and_plotting_flow(self):
+        import numpy as np
+        import uproot
+        from plot_gae import load_samples_from_config, combined_overlays, score_paths_for_sample
+        from utils.InputJson import score_output_basename
+        from utils.GaeConfig import load_config
+
+        repository = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        config = load_config(os.path.join(repository, "gae_config.json"))
+
+        with tempfile.TemporaryDirectory() as scores_dir:
+            files_to_create = [
+                ("data", "data_2018", "Run2018A", "part-0.root", [1.0, 2.0], [1.0, 1.0]),
+                ("data", "data_2018", "Run2018B", "part-0.root", [3.0], [1.0]),
+                ("data", "data_2017", "Run2017B", "part-0.root", [4.0, 5.0], [1.0, 1.0]),
+                ("background", "background_2018", "QCD_HT500to700", "part-0.root", [10.0], [0.5]),
+                ("background", "background_2017", "QCD_HT500to700", "part-0.root", [20.0], [0.8]),
+                ("signal", "signal_2018_s-channel_mMed-1000_mDark-20_rinv-0.3", "s-channel_mMed-1000_mDark-20_rinv-0.3", "part-0.root", [100.0], [1.0]),
+                ("signal", "signal_2017_s-channel_mMed-1000_mDark-20_rinv-0.3", "s-channel_mMed-1000_mDark-20_rinv-0.3", "part-0.root", [200.0], [1.0]),
+            ]
+            created_files = set()
+            for role, sname, dset, fname, sc, wt in files_to_create:
+                out_name = score_output_basename(role, fname, sample_name=sname, dataset=dset)
+                self.assertNotIn(out_name, created_files, f"Collision detected for {out_name}!")
+                created_files.add(out_name)
+                full_p = os.path.join(scores_dir, out_name)
+                with uproot.recreate(full_p) as out_f:
+                    out_f["Scores"] = {
+                        "score": np.asarray(sc, dtype=np.float32),
+                        "weight": np.asarray(wt, dtype=np.float32),
+                    }
+
+            paths_2018 = score_paths_for_sample(scores_dir, config.sample("data_2018"))
+            self.assertEqual(len(paths_2018), 2)
+
+            paths_2017 = score_paths_for_sample(scores_dir, config.sample("data_2017"))
+            self.assertEqual(len(paths_2017), 1)
+
+            loaded = load_samples_from_config(config, scores_dir, ["data_2018", "data_2017"])
+            self.assertEqual(len(loaded["data_2018"][1]), 3)
+            self.assertEqual(len(loaded["data_2017"][1]), 2)
+
+            overlays, roles = combined_overlays(scores_dir)
+            self.assertIn("data", overlays)
+            self.assertEqual(len(overlays["data"][0]), 5)
+            self.assertIn("qcd", overlays)
+            self.assertEqual(len(overlays["qcd"][0]), 2)
 
 
 if __name__ == "__main__":

@@ -405,12 +405,23 @@ The tests create temporary PFNanoAOD fixtures and cover:
 - Loader filtering and sampler weights.
 - Explicit rejection of removed TreeMaker input.
 
-## Repository layout
+### Repository layout
 
 ```text
-architectures/              GNN model definitions
-data_loading/               Lazy graph DataLoader
-tests/                      Regression suite
+run_pipeline.py             Master orchestrator for end-to-end GAE pipeline
+produce_graphs.py           Stage 1: Graph dataset production and caching
+train_gae.py                Stage 2: Autoencoder model training and checkpointing
+score_gae.py                Stage 3: Streaming inference on ROOT files
+plot_gae.py                 Stage 4: Loss curves, ROC/SIC discrimination plots
+gae_config.json             Central pipeline, model, and sample configuration
+setup_gae_env.sh            Environment initialization wrapper for LCG view
+architectures/              GNN model definitions (GraphAE, GraphTransformerAE)
+condor/                     HTCondor batch submission scripts and templates
+crab/                       CRAB grid job configs and wrappers
+data_loading/               Lazy graph DataLoader with weighted/chunk sampling
+inputJson/                  Sample file lists and xrootd endpoints
+tests/                      Regression and unit test suite
+utils/Cuts.py               Configurable event selections (Control / Signal regions)
 utils/GraphBuilder.py       Shared PFNanoAOD graph construction
 utils/JetGraphProducer.py   Dataset production, caching, multiprocessing
 utils/LundTreeUtilities.py  Cambridge–Aachen clustering and tree utilities
@@ -420,175 +431,261 @@ utils/ScoreProducer.py      ROOT scoring workflow
 
 ## GAE training pipeline
 
-A set of command line scripts wraps the modules above into a pipeline that
-reads ROOT files listed in `inputJson/`, applies one shared selection to
-signal, background and data, trains a graph autoencoder, and makes the
-performance plots. It runs locally, under HTCondor, or under CRAB.
+The Graph Autoencoder (GAE) pipeline reads PFNanoAOD ROOT files listed in
+`inputJson/`, applies physics selections, trains a graph autoencoder on the
+unsupervised data control region, scores signal, background, and data files, and
+produces discrimination and evaluation plots.
 
-Everything is driven by `gae_config.json`: the graph representation, the
-production and training settings, the model, and the samples. Each sample
-declares a role (`signal`, `background` or `data`), a year, an input JSON,
-and whether to use cross section weights. An optional `datasets` list
-restricts a sample to some of the datasets inside its JSON.
+The pipeline is organized into 4 modular steps coordinated by a master Python
+orchestrator (`run_pipeline.py`):
 
-### Input files
+1. **Graph production (`produce_graphs.py`)**: Builds and caches chunked PyG graph datasets.
+2. **Model training (`train_gae.py`)**: Trains the autoencoder with preemption safety, checkpointing, and optional Comet ML tracking.
+3. **Streaming scoring (`score_gae.py`)**: Evaluates the trained model on ROOT files without writing intermediate graph files.
+4. **Discrimination plotting (`plot_gae.py`)**: Computes loss curves, score distributions, ROC curves, and Significance Improvement Characteristic (SIC) plots.
 
-`inputJson/<type>/<year>_<type>.json` lists the skims on the GridKA dCache,
-grouped by dataset (`Run2018A`, `QCD_HT500to700`,
-`s-channel_mMed-1000_mDark-20_rinv-0.3`, ...). Regenerate them with a valid
-grid proxy:
+Everything is driven by `gae_config.json` and can be overridden via CLI flags.
 
-```bash
-voms-proxy-init -voms cms
-python make_input_json.py                     # 2017 and 2018, all types
-python make_input_json.py --years 2018 --types background
-```
+---
 
-Only 2017 and 2018 are listed; the 2016 background skims lack the scouting
-collections. Cross section weights use the generated events of the dataset a
-file belongs to, summed over all files of that dataset, so QCD HT bins or
-signal points can share one sample.
+### Environment & Comet ML setup
 
-### Environment
-
-The LCG view provides every dependency except `comet-ml`:
+The base pipeline runs directly in CERN's LCG environment:
 
 ```bash
 cd SVJ_GNN
 source setup_gae_env.sh
 ```
 
-To add comet logging, create a virtual environment on top of the view once.
-`setup_gae_env.sh` then picks it up automatically:
+To enable optional online experiment tracking with [Comet ML](https://www.comet.com/):
 
 ```bash
+# 1. Create a virtual environment layered on top of the LCG view once:
 python -m venv --system-site-packages .venv-gae
 source .venv-gae/bin/activate
 python -m pip install -r requirements-gae.txt
+
+# 2. Export your Comet credentials:
+export COMET_API_KEY="your-api-key"
+export COMET_WORKSPACE="your-workspace"
+export COMET_PROJECT_NAME="SVJScouting_GAE"
 ```
 
-Without it the pipeline still runs; `train_gae.py` falls back to local-only
-logging, and `--no-comet` selects that explicitly.
+If `comet-ml` is not installed or `--no-comet` is passed, the pipeline runs
+normally with local console and JSON history logging.
 
-### Selections
+---
 
-`utils/Cuts.py` is the only place selections are defined; both production
-and scoring call `event_cut_mask(events, role, year)`. On top of the
-pre-selection skims it requires:
+### Regions & physics selections
 
-- `FatJet_isGood` on the two leading FatJets;
-- `1.5 < |Δη(j0, j1)| < 2.2` between the leading and subleading FatJet: the
-  control region the model is trained on. It is applied to data, background
-  and signal alike, so inference happens in the same region;
-- 2018 post-HEM events: reject a leading FatJet with `pT > 400 GeV` and
-  `photonEnergyFraction > 0.6` (extended gap-jet veto). Post-HEM is
-  `run >= 319077` for data; for MC a deterministic pseudo-random fraction
-  `POST_HEM_FRACTION` of events, keyed on `(run, lumSec, event)`;
-- 2018 MC only: the `HEMVeto` branch is required for that post-HEM fraction.
-  Data skims already include the veto.
+Selections are defined centrally in `utils/Cuts.py`. To ensure clean anomaly
+detection and avoid signal contamination:
 
-Branches a cut needs are returned by `cut_branches(role, year)` so they are
-read from the file. Changing a selection changes the fingerprint stored in
-the processed dataset metadata, so stale graph caches are rejected instead of
-being silently reused.
+- **Training** is performed exclusively on **Data in the Control Region**:
+  - `1.5 < |Δη(j0, j1)| < 2.2` between the two leading FatJets.
+  - Leading two FatJets must satisfy `FatJet_isGood`.
+  - 2018 post-HEM veto: reject leading FatJet with $p_T > 400\text{ GeV}$ and
+    $\text{photonEnergyFraction} > 0.6$. Post-HEM MC events use the `HEMVeto` branch.
+- **Scoring and Discrimination** can be evaluated in either:
+  - `--region control` (default): $1.5 < |\Delta\eta| < 2.2$ (the control region).
+  - `--region signal_region` (or `signal`): $|\Delta\eta| < 1.5$ (the signal region).
+  - Additional supported regions: `validation`, `highRT`, `lowRT`, and `inclusive`.
 
-Both `produce_graphs.py` and `score_gae.py` print a cutflow per dataset
-(cumulative events, absolute and relative efficiency) for the files they
-process; `--no-cutflow` skips the extra pass in production.
+A fingerprint of the selection settings is embedded in dataset metadata. If
+cuts change, cached graph datasets are invalidated automatically.
 
-Samples with `"per_dataset": true` (the signal entries) are expanded into one
-sample per dataset, `signal_2018_s-channel_mMed-1000_mDark-20_rinv-0.3` and so
-on, so each signal point is processed and plotted separately. The base name
-still selects all of them: `--samples signal_2018`. Training uses **data**
-in the control region only. QCD and signal are **not** used in
-`train_gae.py`; they are scored after training and compared in
-`plot_gae.py` (loss distributions, ROC, SIC).
+---
 
-### Running the pipeline
+### Master orchestrator (`run_pipeline.py`)
+
+`run_pipeline.py` provides a unified CLI to execute the entire analysis or
+individual stages in sequence:
 
 ```bash
-# 1. Build graph datasets for the training sample (data control region).
-python produce_graphs.py --samples data_2018
+# Run the complete end-to-end pipeline:
+python run_pipeline.py --all --epochs 20 --device auto
 
-# 2. Train the autoencoder on it.
-python train_gae.py --train-on data_2018 --epochs 20
+# Run only production and training:
+python run_pipeline.py --steps produce train --epochs 10
 
-# 3. Score data, background and every signal point straight from ROOT.
-python score_gae.py --checkpoint training/GraphAE_graphAE/checkpoint.pt \
-    --output-dir output_scores \
-    --samples data_2018 qcd_2018 signal_2018
+# Score and generate discrimination plots in the Signal Region:
+python run_pipeline.py --steps score plot --region signal_region \
+    --checkpoint training/GraphAE_graphAE/checkpoint_best.pt
 
-# 4. Make the plots (combines data_part-*, qcd_part-*, per signal point).
-python plot_gae.py --scores-dir output_scores \
-    --history training/GraphAE_graphAE/history.json
+# Quick smoke test on CPU with minimal events:
+python run_pipeline.py --all --train-on smoke --epochs 2 --device cpu --no-comet
 ```
 
-`score_gae.py` writes one local file per input ROOT file under
-``output_scores/`` (``data_part-0.root``, ``qcd_part-0.root``,
-``signal_<point>_part-0.root``). A small end-to-end test with two data
-files is ``bash run_test_pipeline.sh`` (use ``SKIP_PRODUCE=1 SKIP_TRAIN=1``
-to rerun scoring and plots only).
+#### Orchestrator CLI options
 
-Step 4 writes the loss curves, the reconstruction-loss distributions for
-signal, background and data, the normalized number of surviving events
-against the loss threshold, the ROC curves and the significance improvement
-against background efficiency (one curve per signal point against the pooled
-background), together with a `histograms.root` holding the TH1 versions. Adding `--checkpoint` and `--residual-sample` also produces the
-per-feature reconstruction residuals and the latent-space distributions.
+| Flag | Description | Default |
+|---|---|---|
+| `--all` | Execute all 4 stages: `produce`, `train`, `score`, `plot` | `False` |
+| `--steps` | Selective stages to run (e.g. `--steps train score`) | None |
+| `--config` | Path to JSON config file | `gae_config.json` |
+| `--train-on` | Training sample(s) | `data` control region |
+| `--region` | Selection region for scoring/plotting (`control`, `signal_region`, `inclusive`, etc.) | `control` |
+| `--device` | Execution device (`auto`, `cuda`, `cpu`) | `auto` |
+| `--epochs` | Total training epochs | Config setting |
+| `--resume` | Resume training from checkpoint (`[auto\|PATH]`) | None |
+| `--add-epochs` | Additional epochs to train beyond checkpoint count | None |
+| `--batch-size` | Batch size override | Config setting |
+| `--accumulate-grad-batches` | Gradient accumulation steps for limited GPU memory | `1` |
+| `--model-spec` | Model architecture override (e.g. `GraphTransformerAE.GraphTransformerAE`) | Config setting |
+| `--model-kwargs` | JSON string overriding model constructor arguments | None |
+| `--comet` / `--no-comet` | Enable or disable Comet ML logging | Auto-detected |
+| `--num-workers` | Worker processes for ROOT reading and graph construction | Config setting |
 
-A quick end-to-end check on `part-14.root` in the parent directory (2018
-scouting **data**, not MC, listed in `inputJson/smoke/2018_data.json`). Data
-files have no `Metadata` tree, so the `smoke` sample uses `weights: null`;
-only MC samples should set `weights: "xsec"`.
+---
+
+### Checkpoint resumption & preemption safety
+
+`train_gae.py` and `run_pipeline.py` support robust state persistence, allowing
+training to pause and resume seamlessly across batch job preemption or extended
+training schedules:
+
+#### Checkpoint contents
+Checkpoints preserve the full training state:
+- `state_dict`: Model weights and biases.
+- `optimizer_state_dict`: Optimizer momentum buffers, moved to the active device.
+- `epoch`: Completed epoch count.
+- `history`: Full loss trajectory (`batch_total`, `batch_edges`, `batch_nodes`, `epoch_train`, `epoch_validation`, `test`).
+- `best_val_loss`: Lowest observed validation loss.
+- `means` & `stds`: Cached feature normalization statistics (skips recalculation on resume).
+- `split_state`: Reproducible dataset train/val/test partitions.
+
+#### Checkpoint files saved
+- `checkpoint_latest.pt`: Saved after every epoch. Preempted HTCondor jobs can restart immediately from the last completed epoch.
+- `checkpoint_best.pt`: Saved whenever validation loss improves.
+- `checkpoint.pt`: Canonical final checkpoint saved upon completion.
+
+#### How to resume
+```bash
+# Auto-detect latest checkpoint and continue to 20 total epochs:
+python run_pipeline.py --steps train --resume --epochs 20 --run-name my_run
+
+# Add 5 more epochs beyond what was previously trained:
+python run_pipeline.py --steps train --resume --add-epochs 5 --run-name my_run
+
+# Resume directly using train_gae.py:
+python train_gae.py --config gae_config.json --resume training/my_run/checkpoint_latest.pt --add-epochs 10
+```
+
+---
+
+### Limited GPU memory & CPU training
+
+For machines or batch slots with limited GPU memory:
+- Use gradient accumulation:
+  ```bash
+  python run_pipeline.py --steps train --batch-size 64 --accumulate-grad-batches 4 --device cuda
+  ```
+- Or train directly on CPU:
+  ```bash
+  python run_pipeline.py --steps train --device cpu --no-comet
+  ```
+
+---
+
+### Running individual pipeline steps
+
+Each pipeline step can also be run independently as a standalone script:
+
+#### Step 1: Graph dataset production (`produce_graphs.py`)
+```bash
+# Produce graph cache for the training data sample:
+python produce_graphs.py --samples data_2018 --num-workers 4
+
+# Run with event limit for testing:
+python produce_graphs.py --samples smoke --max-events 500 --num-workers 1
+```
+
+#### Step 2: Autoencoder training (`train_gae.py`)
+```bash
+# Train on data control region for 20 epochs:
+python train_gae.py --train-on data_2018 --epochs 20 --device cuda
+
+# Resume from latest checkpoint with additional epochs:
+python train_gae.py --train-on data_2018 --resume --add-epochs 10
+```
+
+#### Step 3: Streaming ROOT scoring (`score_gae.py`)
+```bash
+# Score data, background, and signal samples in the signal region:
+python score_gae.py \
+    --checkpoint training/GraphAE_graphAE/checkpoint_best.pt \
+    --samples data_2018 qcd_2018 signal_2018 \
+    --region signal_region \
+    --output-dir output_scores
+```
+`score_gae.py` streams directly from ROOT entries without writing intermediate
+`.pt` graph files, outputting compact ROOT files with score branches under `output_scores/`.
+
+#### Step 4: Discrimination & evaluation plotting (`plot_gae.py`)
+```bash
+# Generate ROC curves, SIC plots, and loss distributions:
+python plot_gae.py \
+    --scores-dir output_scores \
+    --history training/GraphAE_graphAE/history.json \
+    --plots-dir plots
+
+# Include per-feature reconstruction residuals and latent-space distributions:
+python plot_gae.py \
+    --scores-dir output_scores \
+    --checkpoint training/GraphAE_graphAE/checkpoint_best.pt \
+    --residual-sample data_2018 \
+    --plots-dir plots
+```
+Generates loss curves, reconstruction loss histograms, ROC curves, and SIC
+curves (comparing signal points against background), along with a `histograms.root`
+containing all `TH1` objects styled with `mplhep`.
+
+---
+
+### Model registry & architecture configuration
+
+Architectures are dynamically resolved by `architectures/ModelRegistry.py`.
+To test different models, modify `gae_config.json` or pass CLI flags:
 
 ```bash
-python produce_graphs.py --samples smoke --max-events 200 --num-workers 1
-python train_gae.py --train-on smoke --epochs 1 --no-comet
-python score_gae.py --checkpoint training/GraphAE_graphAE/checkpoint.pt --samples smoke
-python plot_gae.py --history training/GraphAE_graphAE/history.json
+# Use Graph Transformer autoencoder:
+python run_pipeline.py --steps train \
+    --model-spec GraphTransformerAE.GraphTransformerAE \
+    --model-kwargs '{"heads": 4, "dropout": 0.1}'
 ```
 
-`--train-on smoke` is only a plumbing check with one file. For a real run,
-train on the data control region (`data_2017`, `data_2018`). Score
-`qcd_2018` or `background_2018` and `signal_2018` afterward for
-discrimination plots; ROC and SIC need both a scored signal and a scored
-background sample.
+Available models in `architectures/`:
+- `GraphAE.graphAE`: GCN encoder with inner-product adjacency decoder and MLP feature decoder.
+- `GraphTransformerAE.GraphTransformerAE`: Multi-head `TransformerConv` attention encoder.
 
-### Choosing a model
+---
 
-The pipeline never names an architecture. `architectures/ModelRegistry.py`
-resolves a `"Module.ClassName"` spec inside `architectures/`, so a new model
-only needs a new file there and a one line change in `gae_config.json`:
+### Batch submission (HTCondor & CRAB)
 
-```json
-"model": {"spec": "MyNewAE.myNewAE", "kwargs": {"latent_dim": 8}}
-```
-
-`kwargs` is passed straight to the constructor, so a model with different
-arguments needs no pipeline change. A model must provide `forward`,
-`score_batch`, and either `training_loss(batch, alpha)` or both `edges_loss`
-and `features_loss`. Defining `training_loss` lets a model use its own
-objective; everything else falls back to `edges_loss + alpha * features_loss`.
-
-### Batch submission
-
-Graph production and scoring are one job per shard of a sample's files.
-Training is a single job, on a GPU when one is requested.
+#### HTCondor
+`condor/submit_condor.py` generates submit descriptions and scripts for distributed execution:
 
 ```bash
-python condor/submit_condor.py --stage produce --samples background_2018 \
-    --files-per-job 5
-python condor/submit_condor.py --stage train --request-gpus 1
+# Submit graph production across worker nodes (sharded by files):
+python condor/submit_condor.py --stage produce --samples background_2018 --files-per-job 5
 condor_submit condor/submit/produce.jdl
+
+# Submit training on a GPU slot:
+python condor/submit_condor.py --stage train --request-gpus 1
+condor_submit condor/submit/train.jdl
+
+# Submit scoring:
+python condor/submit_condor.py --stage score --samples signal_2018 --files-per-job 5
+condor_submit condor/submit/score.jdl
 ```
 
-CRAB covers the same per-file production and scoring stages through
-`crab/crabConfig_gae.py`, which feeds `Data.userInputFiles` from the sample's
-input JSON and runs `crab/crab_script.sh` as its `scriptExe`. Each job passes
-its files with `--files`, leaving the input JSON intact so cross section
-weights still see the whole dataset. Training is deliberately not a CRAB
-workflow: a long GPU job does not fit the model.
+#### CRAB
+Per-file production and scoring are supported through `crab/crabConfig_gae.py`,
+which sources input files from `inputJson/` and executes `crab/crab_script.sh`.
+
+---
 
 ## Contact
 
 roberto.seidita@cern.ch
+
