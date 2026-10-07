@@ -34,7 +34,9 @@ def write_fixture(root):
             "PFCands_mass": [0.14, 0.0, 0.105, 0.14, 0.0005, 0.0],
         })
     with uproot.recreate(root / "fixture.root") as output:
-        output["Events"] = ak.Array(events)
+        output["Events"] = {
+            key: ak.Array([e[key] for e in events]) for key in events[0]
+        }
 
 
 class ProductionTests(unittest.TestCase):

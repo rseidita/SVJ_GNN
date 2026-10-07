@@ -160,7 +160,10 @@ class JetGraphProducer(Dataset):
         chunk_size=None,
         processing_batch_size=None,
         worker_prefetch=2,
+        multiprocessing_start_method=None,
     ):
+
+        self.multiprocessing_start_method = multiprocessing_start_method
 
         self.root = root
         self.n_store_jets = n_store_jets
@@ -765,13 +768,13 @@ class JetGraphProducer(Dataset):
         if self.num_workers == 1:
             _consume_files()
         else:
-            # ``fork`` avoids requiring user scripts to be guarded by
-            # ``if __name__ == "__main__"`` and shares imported/JIT state
-            # copy-on-write. Fall back to the platform default where absent.
-            start_methods = multiprocessing.get_all_start_methods()
-            context = multiprocessing.get_context(
-                "fork" if "fork" in start_methods else None
-            )
+            method = self.multiprocessing_start_method
+            if method is None:
+                # Do not fork after PyTorch/ROOT has initialized threads.
+                # Forking in a multi-threaded process causes deadlocks.
+                start_methods = multiprocessing.get_all_start_methods()
+                method = "spawn" if "spawn" in start_methods else None
+            context = multiprocessing.get_context(method)
             with concurrent.futures.ProcessPoolExecutor(
                 max_workers=self.num_workers,
                 mp_context=context,
@@ -852,6 +855,7 @@ class FileListGraphProducer(JetGraphProducer):
             raise ValueError("No input ROOT files were provided")
         self.role = role
         self.year = str(year)
+        self.region = kwargs.pop("region", "control")
         if dataset_groups is None:
             dataset_groups = {output_dataset_name: list(self._file_paths)}
         self.dataset_groups = {
@@ -865,7 +869,7 @@ class FileListGraphProducer(JetGraphProducer):
         # per-jet selection needs.
         kwargs["save_jet_idx"] = True
         extra_obs_to_load = list(kwargs.pop("extra_obs_to_load", None) or [])
-        for branch in cut_branches(self.role, self.year):
+        for branch in cut_branches(self.role, self.year, region=self.region):
             if branch not in extra_obs_to_load:
                 extra_obs_to_load.append(branch)
         kwargs["extra_obs_to_load"] = extra_obs_to_load
@@ -881,8 +885,11 @@ class FileListGraphProducer(JetGraphProducer):
         config = super()._processing_config()
         config["role"] = self.role
         config["year"] = self.year
+        config["region"] = self.region
         config["cuts_fingerprint"] = cuts_fingerprint()
-        config["cut_branches"] = sorted(cut_branches(self.role, self.year))
+        config["cut_branches"] = sorted(
+            cut_branches(self.role, self.year, region=self.region)
+        )
         config["input_files_sha256"] = hashlib.sha256(
             "\n".join(self._file_paths).encode()
         ).hexdigest()
@@ -923,7 +930,10 @@ class FileListGraphProducer(JetGraphProducer):
         """Apply the shared selections, then build graphs for what survives."""
         events_in_range = events[i_start:i_stop]
         mask = np.asarray(
-            event_cut_mask(events_in_range, self.role, self.year), dtype=bool
+            event_cut_mask(
+                events_in_range, self.role, self.year, region=self.region
+            ),
+            dtype=bool,
         )
         if mask.shape != (len(events_in_range),):
             raise ValueError(

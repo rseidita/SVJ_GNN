@@ -49,6 +49,12 @@ def parse_arguments():
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--epochs", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=None)
+    parser.add_argument(
+        "--accumulate-grad-batches",
+        type=int,
+        default=1,
+        help="Number of batches to accumulate gradients over (useful for limited GPU VRAM)",
+    )
     parser.add_argument("--learning-rate", type=float, default=None)
     parser.add_argument("--alpha", type=float, default=None)
     parser.add_argument("--model-spec", default=None)
@@ -57,8 +63,33 @@ def parse_arguments():
         default=None,
         help="JSON object overriding the configured model kwargs",
     )
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="auto",
+        default=None,
+        help="Path to checkpoint file to resume from, or 'auto' to resume from latest checkpoint",
+    )
+    parser.add_argument(
+        "--add-epochs",
+        type=int,
+        default=None,
+        help="Number of additional epochs to train beyond checkpoint recorded epoch",
+    )
+    parser.add_argument(
+        "--save-every-n-epochs",
+        type=int,
+        default=1,
+        help="Frequency of saving checkpoint_latest.pt during training (default: 1)",
+    )
     parser.add_argument("--device", default=None)
-    parser.add_argument("--no-comet", action="store_true")
+    parser.add_argument(
+        "--comet",
+        action="store_true",
+        default=False,
+        help="Enable Comet ML tracking (requires comet-ml in venv)",
+    )
+    parser.add_argument("--no-comet", action="store_true", help="Explicitly disable Comet ML tracking")
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
@@ -104,12 +135,17 @@ def resolve_training_samples(config, args):
 
 def start_experiment(config, settings, samples, args):
     """Return a comet experiment, or None when logging locally only."""
-    if args.no_comet:
+    want_comet = getattr(args, "comet", False) or (
+        config.training.get("log_comet", False) and not args.no_comet
+    )
+    if args.no_comet or not want_comet:
         return None
     if comet_ml is None:
         print(
-            "comet_ml is not installed; logging locally only. Install it with "
-            "'python -m pip install -r requirements-gae.txt'."
+            "Notice: Comet ML was requested, but 'comet_ml' is not installed in the current environment.\n"
+            "To enable Comet logging, create and source the layered venv:\n"
+            "  source setup_gae_env.sh\n"
+            "Continuing with local logging."
         )
         return None
     try:
@@ -182,25 +218,63 @@ def main():
     )
     print(f"Using device {device}")
 
+    run_name = args.run_name or config.model.spec.replace(".", "_")
+    output_dir = os.path.join(args.output_dir, run_name)
+    os.makedirs(output_dir, exist_ok=True)
+
+    checkpoint_data = None
+    if args.resume is not None:
+        if args.resume == "auto":
+            candidates = [
+                os.path.join(output_dir, "checkpoint_latest.pt"),
+                os.path.join(output_dir, "checkpoint.pt"),
+            ]
+            resume_path = next((p for p in candidates if os.path.exists(p)), None)
+            if resume_path is None:
+                raise FileNotFoundError(
+                    f"Auto-resume requested, but no checkpoint found in {output_dir}"
+                )
+        else:
+            resume_path = args.resume
+            if not os.path.exists(resume_path):
+                raise FileNotFoundError(f"Checkpoint file '{resume_path}' does not exist.")
+
+        print(f"Loading checkpoint for resumption from '{resume_path}'...")
+        checkpoint_data = torch.load(resume_path, map_location="cpu", weights_only=False)
+
     train_window = [list(settings["train_window"]) for _ in dataset_paths]
     validation_window = [
         list(settings["validation_window"]) for _ in dataset_paths
     ]
     test_window = [list(settings["test_window"]) for _ in dataset_paths]
 
-    # Normalization statistics come from the training partition only.
-    stats_loader = GraphDataLoader(
-        dataset_paths=dataset_paths,
-        split_windows=train_window,
-        split_seed=settings["split_seed"],
-        sampling="sequential",
-        batch_size=settings["batch_size"],
-    )
-    split_state = stats_loader.get_split_state()
-    num_features = stats_loader.dataset[0].num_node_features
-    means, stds = compute_normalization_stats(
-        stats_loader, num_features, verbose=verbose
-    )
+    if (
+        checkpoint_data is not None
+        and checkpoint_data.get("means") is not None
+        and checkpoint_data.get("stds") is not None
+    ):
+        means = checkpoint_data["means"].to(device)
+        stds = checkpoint_data["stds"].to(device)
+        split_state = checkpoint_data.get("split_state")
+        num_features = checkpoint_data.get(
+            "num_features", len(means) if hasattr(means, "__len__") else 9
+        )
+        print("Reusing normalization statistics and split state from checkpoint.")
+    else:
+        # Normalization statistics come from the training partition only.
+        stats_loader = GraphDataLoader(
+            dataset_paths=dataset_paths,
+            split_windows=train_window,
+            split_seed=settings["split_seed"],
+            sampling="sequential",
+            batch_size=settings["batch_size"],
+        )
+        split_state = stats_loader.get_split_state()
+        num_features = stats_loader.dataset[0].num_node_features
+        means, stds = compute_normalization_stats(
+            stats_loader, num_features, verbose=verbose
+        )
+
     normalizer = OnTheFlyNormalizer(["x"], means, stds)
 
     loader_training = GraphDataLoader(
@@ -236,7 +310,8 @@ def main():
     )
     alpha = settings["alpha"]
 
-    experiment = start_experiment(config, settings, samples, args)
+    start_epoch = 0
+    best_val_loss = float("inf")
     history = {
         "batch_total": [],
         "batch_edges": [],
@@ -245,80 +320,39 @@ def main():
         "epoch_validation": [],
     }
 
-    start = time.time()
-    for epoch in range(settings["epochs"]):
-        model.train()
-        epoch_totals = torch.zeros(3, dtype=torch.float64)
-        n_batches = 0
+    if checkpoint_data is not None:
+        if "state_dict" in checkpoint_data:
+            model.load_state_dict(checkpoint_data["state_dict"])
+            print("Loaded model state_dict.")
+        if "optimizer_state_dict" in checkpoint_data and checkpoint_data["optimizer_state_dict"] is not None:
+            optimizer.load_state_dict(checkpoint_data["optimizer_state_dict"])
+            for state in optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device)
+            print("Loaded optimizer state_dict.")
+        else:
+            print("Notice: No optimizer_state_dict in checkpoint; initialized optimizer fresh.")
+        start_epoch = checkpoint_data.get("epoch", 0)
+        best_val_loss = checkpoint_data.get("best_val_loss", float("inf"))
+        if "history" in checkpoint_data and isinstance(checkpoint_data["history"], dict):
+            history = checkpoint_data["history"]
+            print(f"Restored training history with {len(history.get('epoch_train', []))} recorded epochs.")
 
-        for batch in tqdm(
-            loader_training,
-            desc=f"Epoch {epoch}",
-            disable=not verbose,
-            leave=False,
-        ):
-            batch = batch.to(device)
-            total, edges, features = training_loss(model, batch, alpha)
+    if args.add_epochs is not None:
+        total_epochs = start_epoch + args.add_epochs
+    else:
+        total_epochs = settings["epochs"]
 
-            optimizer.zero_grad()
-            total.backward()
-            optimizer.step()
+    print(f"Training schedule: starting at epoch {start_epoch}, targeting total {total_epochs} epochs.")
 
-            values = [total.item(), edges.item(), alpha * features.item()]
-            history["batch_total"].append(values[0])
-            history["batch_edges"].append(values[1])
-            history["batch_nodes"].append(values[2])
-            epoch_totals += torch.tensor(values, dtype=torch.float64)
-            n_batches += 1
-
-        train_losses = (epoch_totals / max(n_batches, 1)).tolist()
-        validation_losses = evaluate(
-            model,
-            loader_validation,
-            alpha,
-            device,
-            f"Validation {epoch}",
-            verbose,
-        )
-        history["epoch_train"].append(train_losses)
-        history["epoch_validation"].append(validation_losses)
-
-        message = (
-            f"Epoch {epoch}: train total {train_losses[0]:.5f} "
-            f"(edges {train_losses[1]:.5f}, nodes {train_losses[2]:.5f})"
-        )
-        if validation_losses is not None:
-            message += f", validation total {validation_losses[0]:.5f}"
-        print(message)
-
-        if experiment is not None:
-            experiment.log_metric("train_total", train_losses[0], epoch=epoch)
-            experiment.log_metric("train_edges", train_losses[1], epoch=epoch)
-            experiment.log_metric("train_nodes", train_losses[2], epoch=epoch)
-            if validation_losses is not None:
-                experiment.log_metric(
-                    "validation_total", validation_losses[0], epoch=epoch
-                )
-
-    print(f"--> Training completed in {time.time() - start:.2f} seconds")
-
-    test_losses = evaluate(
-        model, loader_testing, alpha, device, "Test", verbose
-    )
-    if test_losses is not None:
-        history["test"] = test_losses
-        print(f"Held-out test total loss: {test_losses[0]:.5f}")
-        if experiment is not None:
-            experiment.log_metric("test_total", test_losses[0])
-
-    run_name = args.run_name or config.model.spec.replace(".", "_")
-    output_dir = os.path.join(args.output_dir, run_name)
-    os.makedirs(output_dir, exist_ok=True)
-
-    checkpoint_path = os.path.join(output_dir, "checkpoint.pt")
-    torch.save(
-        {
+    def save_checkpoint(path, current_epoch, current_best_loss):
+        payload = {
+            "epoch": current_epoch,
             "state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "history": history,
+            "best_val_loss": current_best_loss,
             "model_spec": config.model.spec,
             "model_kwargs": config.model.kwargs,
             "num_features": num_features,
@@ -329,9 +363,125 @@ def main():
             "graph": dict(config.graph),
             "training": settings,
             "train_samples": [sample.name for sample in samples],
-        },
-        checkpoint_path,
+        }
+        torch.save(payload, path)
+
+    experiment = start_experiment(config, settings, samples, args)
+    if experiment is not None and checkpoint_data is not None:
+        experiment.log_parameter("resumed_from_epoch", start_epoch)
+
+    if start_epoch >= total_epochs:
+        print(
+            f"Checkpoint is already at epoch {start_epoch}, which meets or exceeds "
+            f"target total epochs {total_epochs}. Skipping training loop."
+        )
+    else:
+        start = time.time()
+        for epoch in range(start_epoch, total_epochs):
+            model.train()
+            epoch_totals = torch.zeros(3, dtype=torch.float64)
+            n_batches = 0
+            optimizer.zero_grad()
+
+            for batch_idx, batch in enumerate(
+                tqdm(
+                    loader_training,
+                    desc=f"Epoch {epoch}",
+                    disable=not verbose,
+                    leave=False,
+                )
+            ):
+                batch = batch.to(device)
+                total, edges, features = training_loss(model, batch, alpha)
+
+                (total / args.accumulate_grad_batches).backward()
+                if (batch_idx + 1) % args.accumulate_grad_batches == 0 or (
+                    batch_idx + 1
+                ) == len(loader_training):
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                values = [total.item(), edges.item(), features.item()]
+                history["batch_total"].append(values[0])
+                history["batch_edges"].append(values[1])
+                history["batch_nodes"].append(values[2])
+                epoch_totals += torch.tensor(values, dtype=torch.float64)
+                n_batches += 1
+
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+            train_losses = (epoch_totals / max(n_batches, 1)).tolist()
+            validation_losses = evaluate(
+                model,
+                loader_validation,
+                alpha,
+                device,
+                f"Validation {epoch}",
+                verbose,
+            )
+            history["epoch_train"].append(train_losses)
+            history["epoch_validation"].append(validation_losses)
+
+            is_best = False
+            if validation_losses is not None:
+                val_total = validation_losses[0]
+                if val_total < best_val_loss:
+                    best_val_loss = val_total
+                    is_best = True
+
+            message = (
+                f"Epoch {epoch}: train total {train_losses[0]:.5f} "
+                f"(edges {train_losses[1]:.5f}, nodes {train_losses[2]:.5f})"
+            )
+            if validation_losses is not None:
+                message += (
+                    f", val total {validation_losses[0]:.5f} "
+                    f"(edges {validation_losses[1]:.5f}, nodes {validation_losses[2]:.5f})"
+                )
+            print(message)
+
+            if experiment is not None:
+                experiment.log_metric("train_total", train_losses[0], epoch=epoch)
+                experiment.log_metric("train_edges", train_losses[1], epoch=epoch)
+                experiment.log_metric("train_nodes", train_losses[2], epoch=epoch)
+                if validation_losses is not None:
+                    experiment.log_metric(
+                        "validation_total", validation_losses[0], epoch=epoch
+                    )
+                    experiment.log_metric(
+                        "validation_edges", validation_losses[1], epoch=epoch
+                    )
+                    experiment.log_metric(
+                        "validation_nodes", validation_losses[2], epoch=epoch
+                    )
+
+            if (epoch + 1 - start_epoch) % args.save_every_n_epochs == 0 or (epoch + 1 == total_epochs):
+                save_checkpoint(
+                    os.path.join(output_dir, "checkpoint_latest.pt"),
+                    epoch + 1,
+                    best_val_loss,
+                )
+                if is_best:
+                    save_checkpoint(
+                        os.path.join(output_dir, "checkpoint_best.pt"),
+                        epoch + 1,
+                        best_val_loss,
+                    )
+
+        print(f"--> Training completed in {time.time() - start:.2f} seconds")
+
+    test_losses = evaluate(
+        model, loader_testing, alpha, device, "Test", verbose
     )
+    if test_losses is not None:
+        history["test"] = test_losses
+        print(f"Held-out test total loss: {test_losses[0]:.5f}")
+        if experiment is not None:
+            experiment.log_metric("test_total", test_losses[0])
+
+    checkpoint_path = os.path.join(output_dir, "checkpoint.pt")
+    save_checkpoint(checkpoint_path, total_epochs, best_val_loss)
 
     history_path = os.path.join(output_dir, "history.json")
     with open(history_path, "w") as history_file:
