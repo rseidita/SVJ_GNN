@@ -65,20 +65,27 @@ def parse_arguments():
         action="store_true",
         help="Skip the per-dataset cutflow pass over the input files",
     )
+    parser.add_argument(
+        "--region",
+        default="control",
+        choices=["control", "signal_region", "signal", "validation", "highRT", "lowRT", "inclusive"],
+        help="Selection region (control, signal_region, validation, inclusive)",
+    )
     parser.add_argument("--quiet", action="store_true")
     return parser.parse_args()
 
 
-def print_cutflows(sample, file_paths, groups, max_events):
+def print_cutflows(sample, file_paths, groups, max_events, region="control"):
     """Cumulative selection counts per dataset, summed over *file_paths*."""
-    branches = cut_branches(sample.role, sample.year)
+    branches = cut_branches(sample.role, sample.year, region=region)
     totals = {}
     for file_path in file_paths:
         with uproot.open(f"{file_path}:Events") as tree:
             events = tree.arrays(branches, entry_stop=max_events, library="ak")
         dataset = dataset_of(file_path, groups)
         totals[dataset] = add_cutflow(
-            totals.get(dataset, {}), cutflow(events, sample.role, sample.year)
+            totals.get(dataset, {}),
+            cutflow(events, sample.role, sample.year, region=region),
         )
     for dataset, counts in totals.items():
         n_files = sum(dataset_of(path, groups) == dataset for path in file_paths)
@@ -107,6 +114,7 @@ def producer_kwargs(config, sample, args):
     kwargs["label"] = sample.label
     kwargs["max_events_to_process"] = args.max_events
     kwargs["verbose"] = not args.quiet
+    kwargs["region"] = args.region
     return kwargs
 
 
@@ -142,11 +150,11 @@ def main():
 
         print(
             f"Producing graphs for sample '{name}' ({sample.role}, "
-            f"{sample.year}) from {len(file_paths)} file(s) in "
+            f"{sample.year}, region={args.region}) from {len(file_paths)} file(s) in "
             f"{len(groups)} dataset(s) into {os.path.join(root, 'processed')}"
         )
         if not args.no_cutflow:
-            print_cutflows(sample, file_paths, groups, args.max_events)
+            print_cutflows(sample, file_paths, groups, args.max_events, region=args.region)
         dataset = FileListGraphProducer(
             root=root,
             output_dataset_name=dataset_name,
