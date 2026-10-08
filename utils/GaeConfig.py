@@ -253,6 +253,7 @@ class PipelineConfig:
                         return os.path.abspath(cand)
             raise FileNotFoundError(f"Specified checkpoint '{checkpoint_path}' does not exist.")
 
+    def _get_candidate_bases(self, base_dir=None):
         train_dir = self.training.get("output_dir", "training")
         bases = []
         if base_dir:
@@ -273,16 +274,74 @@ class PipelineConfig:
             else:
                 candidate_bases.append(os.path.join(base, train_dir))
             candidate_bases.append(base)
+        return candidate_bases
+
+    def find_run_seeds(self, run_name, base_dir=None):
+        """Discover available integer seeds for a given run_name across training directories."""
+        candidate_bases = self._get_candidate_bases(base_dir)
+        seeds = set()
+        pattern = re.compile(rf"^{re.escape(run_name)}_seed(\d+)$")
+        for c_base in candidate_bases:
+            if not os.path.isdir(c_base):
+                continue
+            for entry in os.listdir(c_base):
+                m = pattern.match(entry)
+                if m and os.path.isdir(os.path.join(c_base, entry)):
+                    for ckpt_name in ("checkpoint_best.pt", "checkpoint.pt", "checkpoint_latest.pt"):
+                        if os.path.isfile(os.path.join(c_base, entry, ckpt_name)):
+                            seeds.add(int(m.group(1)))
+                            break
+        return sorted(seeds)
+
+    def find_checkpoint(self, checkpoint_path=None, run_name=None, seed=None, base_dir=None):
+        """Locate model checkpoint file from explicit path or previous train stage output."""
+        if checkpoint_path:
+            if os.path.isfile(checkpoint_path):
+                return os.path.abspath(checkpoint_path)
+            if os.path.isdir(checkpoint_path):
+                for name in ("checkpoint_best.pt", "checkpoint.pt", "checkpoint_latest.pt"):
+                    cand = os.path.join(checkpoint_path, name)
+                    if os.path.isfile(cand):
+                        return os.path.abspath(cand)
+            raise FileNotFoundError(f"Specified checkpoint '{checkpoint_path}' does not exist.")
+
+        candidate_bases = self._get_candidate_bases(base_dir)
+
+        if run_name:
+            if seed is not None:
+                run_candidates = [run_name] if run_name.endswith(f"_seed{seed}") else [f"{run_name}_seed{seed}"]
+            else:
+                run_candidates = [run_name]
+
+            for c_base in candidate_bases:
+                if not os.path.isdir(c_base):
+                    continue
+                for r in run_candidates:
+                    r_dir = os.path.join(c_base, r)
+                    if os.path.isdir(r_dir):
+                        for ckpt_name in ("checkpoint_best.pt", "checkpoint.pt", "checkpoint_latest.pt"):
+                            f = os.path.join(r_dir, ckpt_name)
+                            if os.path.isfile(f):
+                                return os.path.abspath(f)
+
+            # If seed was not specified, check if any seed subdirectories exist
+            if seed is None:
+                found_seeds = self.find_run_seeds(run_name, base_dir=base_dir)
+                if len(found_seeds) == 1:
+                    return self.find_checkpoint(checkpoint_path=None, run_name=run_name, seed=found_seeds[0], base_dir=base_dir)
+                elif len(found_seeds) > 1:
+                    raise ValueError(
+                        f"Run '{run_name}' has multiple seed checkpoints: {found_seeds}. "
+                        "Please specify --seed <seed> or --seeds to select a seed."
+                    )
+
+            raise FileNotFoundError(
+                f"No checkpoint found for run_name='{run_name}' (seed={seed}) in {candidate_bases}. "
+                "Automatic fallback to generic model is disabled. Ensure training has completed or supply --checkpoint."
+            )
 
         spec_name = self.model.spec.replace(".", "_")
-        run_candidates = []
-        if run_name:
-            if seed is not None and not run_name.endswith(f"_seed{seed}"):
-                run_candidates.append(f"{run_name}_seed{seed}")
-            run_candidates.append(run_name)
-        if seed is not None:
-            run_candidates.append(f"{spec_name}_seed{seed}")
-        run_candidates.append(spec_name)
+        run_candidates = [f"{spec_name}_seed{seed}"] if seed is not None else [spec_name]
 
         for c_base in candidate_bases:
             if not os.path.isdir(c_base):
