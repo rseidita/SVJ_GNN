@@ -24,6 +24,7 @@ import uproot
 from utils.GaeConfig import load_config
 from utils.InputJson import score_output_basename
 from utils.PlotUtils import (
+    plot_auc_2d,
     plot_feature_residuals,
     plot_latent_distributions,
     plot_loss_curves,
@@ -74,6 +75,12 @@ def parse_arguments():
         default=None,
         help="Sample with produced graphs used for residual and latent plots",
     )
+    parser.add_argument("--run-name", default=None, help="Training run name to plot scores and history for")
+    parser.add_argument("--seed", type=int, default=None, help="Training random seed to plot")
+    parser.add_argument("--seeds", type=int, nargs="+", default=None, help="List of random seeds to plot")
+    parser.add_argument("--eos-dir", default="/eos/user/n/nparmar/SVJScouting", help="EOS directory prefix")
+    parser.add_argument("--year", default=None, help="Year to display in CMS label (e.g. 2018)")
+    parser.add_argument("--lumi", type=float, default=None, help="Luminosity in fb-1 to display in CMS label")
     parser.add_argument("--max-batches", type=int, default=20)
     parser.add_argument("--device", default="cpu")
     return parser.parse_args()
@@ -168,9 +175,16 @@ def combined_overlays(scores_dir):
         scores_parts = []
         weights_parts = []
         for path in paths:
-            score, weight = read_scores(path)
+            try:
+                score, weight = read_scores(path)
+            except (ValueError, OSError, KeyError, IndexError) as exc:
+                print(f"Skipping unreadable score file {path}: {exc}")
+                continue
             scores_parts.append(score)
             weights_parts.append(weight)
+        if not scores_parts:
+            print(f"Skipping {key}: no readable score files")
+            continue
         overlays[key] = (
             np.concatenate(scores_parts),
             np.concatenate(weights_parts),
@@ -191,9 +205,16 @@ def load_samples_from_config(config, scores_dir, sample_names):
         scores_parts = []
         weights_parts = []
         for path in paths:
-            score, weight = read_scores(path)
+            try:
+                score, weight = read_scores(path)
+            except (ValueError, OSError, KeyError, IndexError) as exc:
+                print(f"Skipping unreadable score file {path}: {exc}")
+                continue
             scores_parts.append(score)
             weights_parts.append(weight)
+        if not scores_parts:
+            print(f"Skipping {sample.name}: no readable score files")
+            continue
         samples[sample.name] = (
             sample.role,
             np.concatenate(scores_parts),
@@ -242,7 +263,7 @@ def load_samples(config, scores_dir, sample_names=None):
     return overlays, pool_discovered(overlays, roles)
 
 
-def residual_plots(args, config, formats, outdir):
+def residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device="cpu", bins=50, max_batches=20):
     """Residual and latent plots, which need the model and a graph dataset."""
     import torch
 
@@ -250,18 +271,18 @@ def residual_plots(args, config, formats, outdir):
     from data_loading.graphDataLoader import GraphDataLoader
     from utils.LundTreeUtilities import OnTheFlyNormalizer
 
-    checkpoint = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     print(f"Model: {checkpoint['model_spec']}")
-    print(f"Model checkpoint path: {args.checkpoint}")
+    print(f"Model checkpoint path: {checkpoint_path}")
     model = build_model(
         checkpoint["model_spec"],
         checkpoint["num_features"],
         **checkpoint["model_kwargs"],
     )
     model.load_state_dict(checkpoint["state_dict"])
-    model = model.to(args.device)
+    model = model.to(device)
 
-    sample = config.sample(args.residual_sample)
+    sample = config.sample(residual_sample)
     normalizer = OnTheFlyNormalizer(
         ["x"], checkpoint["means"], checkpoint["stds"]
     )
@@ -279,67 +300,41 @@ def residual_plots(args, config, formats, outdir):
         model,
         loader,
         os.path.join(outdir, "feature_residuals"),
-        device=args.device,
-        max_batches=args.max_batches,
-        bins=args.bins,
+        device=device,
+        max_batches=max_batches,
+        bins=bins,
         formats=formats,
     )
     plot_latent_distributions(
         model,
         loader,
         os.path.join(outdir, "latent_distributions"),
-        device=args.device,
-        max_batches=args.max_batches,
-        bins=args.bins,
+        device=device,
+        max_batches=max_batches,
+        bins=bins,
         formats=formats,
     )
 
 
-def main():
-    args = parse_arguments()
-    config = load_config(args.config)
-    formats = tuple(args.formats.split(","))
-    scores_dir = args.scores_dir or config.scoring.get("output_dir", "output_scores")
-    outdir = args.outdir or config.plotting.get("plots_dir", "plots")
+def plot_single_target(config, scores_dir, outdir, formats, bins=50, history_path=None, checkpoint_path=None, residual_sample=None, sample_names=None, device="cpu", max_batches=20, year=None, lumi=None):
     os.makedirs(outdir, exist_ok=True)
-
-    if args.history is not None:
-        with open(args.history) as history_file:
+    if history_path is not None and os.path.isfile(history_path):
+        with open(history_path) as history_file:
             history = json.load(history_file)
-        plot_loss_curves(
-            history,
-            os.path.join(outdir, "loss_curves"),
-            formats=formats,
-        )
+        plot_loss_curves(history, os.path.join(outdir, "loss_curves"), formats=formats, year=year, lumi=lumi)
         print("Wrote loss_curves")
 
-    overlays, pooled = load_samples(
-        config, scores_dir, sample_names=args.samples
-    )
+    overlays, pooled = load_samples(config, scores_dir, sample_names=sample_names)
     if not overlays:
-        print(
-            f"No score files found in '{scores_dir}'; run score_gae.py "
-            "first to make the score based plots"
-        )
+        print(f"No score files found in '{scores_dir}'; run score_gae.py first to make the score based plots")
     else:
-        histograms = plot_score_distributions(
-            overlays,
-            os.path.join(outdir, "score_distributions"),
-            bins=args.bins,
-            density=True,
-            formats=formats,
-        )
-        plot_loss_efficiency(
-            overlays,
-            os.path.join(outdir, "loss_efficiency"),
-            formats=formats,
-        )
+        histograms = plot_score_distributions(overlays, os.path.join(outdir, "score_distributions"), bins=bins * 2, density=True, formats=formats, year=year, lumi=lumi)
+        plot_loss_efficiency(overlays, os.path.join(outdir, "loss_efficiency"), formats=formats, year=year, lumi=lumi)
         print("Wrote score_distributions and loss_efficiency")
-
         write_th1s(os.path.join(outdir, "histograms.root"), histograms)
         print("Wrote histograms.root")
 
-        if args.samples:
+        if sample_names:
             sig_samples = [config.sample(name) for name in overlays if name in config.samples and config.sample(name).role == "signal"]
             multi_year = len({getattr(s, "year", None) for s in sig_samples if getattr(s, "year", None)}) > 1
             signals = {
@@ -355,32 +350,86 @@ def main():
             }
         if signals and "background" in pooled:
             background_scores, background_weights = pooled["background"]
-            plot_roc(
-                signals,
-                background_scores,
-                os.path.join(outdir, "roc"),
-                weights_background=background_weights,
-                formats=formats,
-            )
-            plot_sic_vs_fpr(
-                signals,
-                background_scores,
-                os.path.join(outdir, "sic_vs_fpr"),
-                weights_background=background_weights,
-                formats=formats,
-            )
+            curves, aucs = plot_roc(signals, background_scores, os.path.join(outdir, "roc"), weights_background=background_weights, formats=formats, year=year, lumi=lumi)
+            plot_sic_vs_fpr(signals, background_scores, os.path.join(outdir, "sic_vs_fpr"), weights_background=background_weights, formats=formats, year=year, lumi=lumi)
             print("Wrote roc and sic_vs_fpr")
+            h_auc_2d = plot_auc_2d(aucs, os.path.join(outdir, "auc_2d"), formats=formats, year=year, lumi=lumi)
+            if h_auc_2d is not None:
+                histograms["auc_2d"] = h_auc_2d
+                write_th1s(os.path.join(outdir, "histograms.root"), histograms)
+            print("Wrote auc_2d")
         else:
-            print(
-                "Need both a signal and a background sample with scores for "
-                "the ROC and SIC plots; skipping them"
-            )
+            print("Need both a signal and a background sample with scores for the ROC and SIC plots; skipping them")
 
-    if args.checkpoint is not None and args.residual_sample is not None:
-        residual_plots(args, config, formats, outdir)
+    if checkpoint_path is not None and residual_sample is not None and os.path.isfile(checkpoint_path):
+        residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device=device, bins=bins, max_batches=max_batches)
         print("Wrote feature_residuals and latent_distributions")
 
     print(f"Plots are in {outdir}")
+
+
+def main():
+    args = parse_arguments()
+    config = load_config(args.config)
+    formats = tuple(args.formats.split(","))
+
+    seeds = args.seeds if args.seeds else ([args.seed] if args.seed is not None else [None])
+    base_scores_cfg = config.scoring.get("output_dir", "output_scores")
+    base_plots_cfg = config.plotting.get("plots_dir", "plots")
+    base_train_cfg = config.training.get("output_dir", "training")
+
+    for seed in seeds:
+        seed_tag = f"seed{seed}" if seed is not None else ""
+        if args.scores_dir:
+            scores_dir = os.path.join(args.scores_dir, seed_tag) if (len(seeds) > 1 and seed is not None and not args.scores_dir.endswith(seed_tag)) else args.scores_dir
+        elif args.run_name:
+            rel = os.path.join(base_scores_cfg, args.run_name, seed_tag) if seed is not None else os.path.join(base_scores_cfg, args.run_name)
+            eos_cand = os.path.join(args.eos_dir, rel) if args.eos_dir else None
+            scores_dir = eos_cand if (eos_cand and os.path.isdir(eos_cand)) else rel
+        else:
+            eos_cand = os.path.join(args.eos_dir, base_scores_cfg) if args.eos_dir else None
+            scores_dir = eos_cand if (eos_cand and os.path.isdir(eos_cand)) else base_scores_cfg
+
+        if args.outdir:
+            outdir = os.path.join(args.outdir, seed_tag) if (len(seeds) > 1 and seed is not None and not args.outdir.endswith(seed_tag)) else args.outdir
+        elif args.run_name:
+            outdir = os.path.join(base_plots_cfg, args.run_name, seed_tag) if seed is not None else os.path.join(base_plots_cfg, args.run_name)
+        else:
+            outdir = base_plots_cfg
+
+        history_path = args.history
+        if history_path is None and args.run_name:
+            run_tag = f"{args.run_name}_{seed_tag}" if seed is not None else args.run_name
+            eos_cand = os.path.join(args.eos_dir, base_train_cfg, run_tag, "history.json") if args.eos_dir else None
+            local_cand = os.path.join(base_train_cfg, run_tag, "history.json")
+            if eos_cand and os.path.isfile(eos_cand):
+                history_path = eos_cand
+            elif os.path.isfile(local_cand):
+                history_path = local_cand
+
+        checkpoint_path = args.checkpoint
+        if checkpoint_path is None and args.run_name and args.residual_sample:
+            try:
+                checkpoint_path = config.find_checkpoint(run_name=args.run_name, seed=seed, base_dir=args.eos_dir)
+            except Exception:
+                checkpoint_path = None
+
+        print(f"\n--- Plotting for {'seed ' + str(seed) if seed is not None else 'default'} (scores: {scores_dir}) ---")
+        plot_single_target(
+            config,
+            scores_dir,
+            outdir,
+            formats,
+            bins=args.bins,
+            history_path=history_path,
+            checkpoint_path=checkpoint_path,
+            residual_sample=args.residual_sample,
+            sample_names=args.samples,
+            device=args.device,
+            max_batches=args.max_batches,
+            year=args.year,
+            lumi=args.lumi,
+        )
 
 
 if __name__ == "__main__":
