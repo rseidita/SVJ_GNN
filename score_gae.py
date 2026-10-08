@@ -211,8 +211,13 @@ def main():
     print(f"Loaded {checkpoint['model_spec']} with {checkpoint['num_features']} node features on {device} from '{checkpoint_path}'")
 
     graph_settings = checkpoint["graph"]
-    max_jets = graph_settings.get("n_store_jets")
-    output_dir = args.output_dir or config.scoring.get("output_dir", "output_scores")
+    base_scoring_dir = config.scoring.get("output_dir", "output_scores")
+    if args.output_dir:
+        output_dir = args.output_dir
+    elif args.run_name:
+        output_dir = os.path.join(base_scoring_dir, args.run_name, f"seed{args.seed}") if args.seed is not None else os.path.join(base_scoring_dir, args.run_name)
+    else:
+        output_dir = base_scoring_dir
     os.makedirs(output_dir, exist_ok=True)
 
     for sample in config.select(args.samples):

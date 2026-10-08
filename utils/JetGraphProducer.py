@@ -4,10 +4,20 @@ import hashlib
 import multiprocessing
 import os
 import pickle
+import re
+import sys
+import warnings
 import numpy as np
 import uproot
 import torch
 from torch_geometric.data import Dataset, Data
+try:
+    from torch_geometric.data.dataset import _repr, files_exist
+except ImportError:
+    def _repr(obj):
+        return 'None' if obj is None else re.sub(r'(<.*?)\s.*(>)', r'\1\2', str(obj))
+    def files_exist(files):
+        return len(files) != 0 and all(os.path.exists(f) for f in files)
 from tqdm import tqdm
 import logging
 from utils.GraphBuilder import (
@@ -218,6 +228,7 @@ class JetGraphProducer(Dataset):
         self.event_batch_size = int(event_batch_size)
         # Compatibility aliases for external code.
         self.chunk_size = self.graphs_per_chunk
+        self.processing_batch_size = self.event_batch_size
         cache_env = os.environ.get("GAE_CHUNK_CACHE_SIZE")
         self._n_cached_chunks = int(cache_env) if cache_env else (50 if n_cached_chunks == 2 else n_cached_chunks)
         self.validate_cache_config = validate_cache_config
@@ -805,6 +816,62 @@ class JetGraphProducer(Dataset):
             meta,
             os.path.join(self.processed_dir, f"{self.output_dataset_name}_meta.pt"),
         )
+
+    @property
+    def pre_transform_file(self) -> str:
+        """Path to the shard-specific pre_transform marker file."""
+        return os.path.join(self.processed_dir, f"{self.output_dataset_name}_pre_transform.pt")
+
+    @property
+    def pre_filter_file(self) -> str:
+        """Path to the shard-specific pre_filter marker file."""
+        return os.path.join(self.processed_dir, f"{self.output_dataset_name}_pre_filter.pt")
+
+    def _process(self):
+        """Process graphs and save transform/filter markers with shard names to prevent write collisions."""
+        for file_path, legacy_name, current_val, name in [
+            (self.pre_transform_file, "pre_transform.pt", self.pre_transform, "pre_transform"),
+            (self.pre_filter_file, "pre_filter.pt", self.pre_filter, "pre_filter"),
+        ]:
+            check_path = file_path if os.path.exists(file_path) else os.path.join(self.processed_dir, legacy_name)
+            if os.path.exists(check_path):
+                try:
+                    saved_val = torch.load(check_path, map_location="cpu", weights_only=False)
+                    if saved_val != _repr(current_val):
+                        warnings.warn(
+                            f"The `{name}` argument differs from the one used in "
+                            "the pre-processed version of this dataset. If you want to "
+                            "make use of another pre-processing technique, pass "
+                            "`force_reload=True` explicitly to reload the dataset."
+                        )
+                except Exception:
+                    pass
+
+        if not getattr(self, "force_reload", False) and files_exist(self.processed_paths):
+            return
+
+        if getattr(self, "log", True) and "pytest" not in sys.modules:
+            print("Processing...", file=sys.stderr)
+
+        os.makedirs(self.processed_dir, exist_ok=True)
+        self.process()
+
+        torch.save(_repr(self.pre_transform), self.pre_transform_file)
+        torch.save(_repr(self.pre_filter), self.pre_filter_file)
+
+        for legacy_name, obj in [
+            ("pre_transform.pt", self.pre_transform),
+            ("pre_filter.pt", self.pre_filter),
+        ]:
+            legacy_path = os.path.join(self.processed_dir, legacy_name)
+            try:
+                if not os.path.exists(legacy_path):
+                    torch.save(_repr(obj), legacy_path)
+            except OSError:
+                pass
+
+        if getattr(self, "log", True) and "pytest" not in sys.modules:
+            print("Done!", file=sys.stderr)
 
 
 class FileListGraphProducer(JetGraphProducer):

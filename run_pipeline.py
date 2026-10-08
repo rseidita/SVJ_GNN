@@ -253,9 +253,6 @@ def main():
     # Resolve config-driven paths and active seed
     active_seed = args.seed if args.seed is not None else config.training.get("seed")
     training_output_dir = args.output_dir or config.training.get("output_dir", "training")
-    scores_output_dir = args.scores_dir or config.scoring.get("output_dir", "output_scores")
-    plots_output_dir = args.plots_dir or config.plotting.get("plots_dir", "plots")
-
     # Determine run name and checkpoint path
     default_run_name = (args.model_spec or config.model.spec).replace(".", "_")
     if active_seed is not None:
@@ -263,6 +260,11 @@ def main():
     run_name = args.run_name or default_run_name
     checkpoint_path = args.checkpoint or os.path.join(training_output_dir, run_name, "checkpoint.pt")
     history_path = args.history or os.path.join(training_output_dir, run_name, "history.json")
+
+    base_scores = config.scoring.get("output_dir", "output_scores")
+    scores_output_dir = args.scores_dir or (os.path.join(base_scores, run_name, f"seed{active_seed}") if active_seed is not None else os.path.join(base_scores, run_name))
+    base_plots = config.plotting.get("plots_dir", "plots")
+    plots_output_dir = args.plots_dir or (os.path.join(base_plots, run_name, f"seed{active_seed}") if active_seed is not None else os.path.join(base_plots, run_name))
 
     # Step 1: Produce Graphs
     if "produce" in steps_to_run:
