@@ -96,8 +96,10 @@ def parse_arguments():
     parser.add_argument("--config", default="gae_config.json")
     parser.add_argument("--samples", nargs="+", default=None)
     parser.add_argument("--files-per-job", type=int, default=5)
+    default_user = os.environ.get("USER", "nparmar")
+    default_log_dir = f"/tmp/{default_user}/logs"
     parser.add_argument("--submit-dir", default=os.path.join(CONDOR_DIR, "submit"))
-    parser.add_argument("--log-dir", default=os.path.join(CONDOR_DIR, "logs"))
+    parser.add_argument("--log-dir", default=default_log_dir, help=f"Directory for job stdout/stderr/log (default: {default_log_dir})")
     parser.add_argument("--request-cpus", type=int, default=1)
     parser.add_argument("--request-memory", default="8 GB")
     parser.add_argument("--request-disk", default="4 GB")
@@ -150,7 +152,7 @@ def parse_arguments():
         type=int,
         nargs="+",
         default=None,
-        help="List of random seeds to train multiple independent runs (train stage only)",
+        help="List of random seeds to train or score multiple independent runs",
     )
     parser.add_argument(
         "--comet",
@@ -223,21 +225,63 @@ def make_tarball(path):
 
 
 def queue_items(args, config):
-    """One ``stage, sample, shard`` line per job."""
+    """One ``stage, sample, shard, log_subdir, extra_args`` line per job."""
     if args.stage == "train":
         sample_tag = args.run_name or ("_".join(args.samples) if args.samples else "train")
         if args.seeds:
-            return [f"{args.stage}, {sample_tag}_seed{seed}, 0" for seed in args.seeds]
+            return [
+                f"{args.stage}, {sample_tag}_seed{seed}, 0, "
+                + (f"train/{args.run_name}/seed{seed}" if args.run_name else f"train/seed{seed}")
+                + f", --seed {seed}"
+                for seed in args.seeds
+            ]
         if args.seed is not None:
-            return [f"{args.stage}, {sample_tag}_seed{args.seed}, 0"]
-        return [f"{args.stage}, {sample_tag}, 0"]
+            log_sub = f"train/{args.run_name}/seed{args.seed}" if args.run_name else f"train/seed{args.seed}"
+            return [f"{args.stage}, {sample_tag}_seed{args.seed}, 0, {log_sub}, --seed {args.seed}"]
+        log_sub = f"train/{args.run_name}" if args.run_name else "train"
+        return [f"{args.stage}, {sample_tag}, 0, {log_sub}, "]
+
+    if args.stage == "score":
+        base_scoring_dir = config.scoring.get("output_dir", "output_scores")
+        seeds = args.seeds if args.seeds else ([args.seed] if args.seed is not None else [None])
+        items = []
+        for seed in seeds:
+            ckpt_path = config.find_checkpoint(
+                args.checkpoint,
+                run_name=args.run_name,
+                seed=seed,
+                base_dir=args.eos_dir if args.output_location == "eos" else None,
+            )
+            seed_label = f" (seed {seed})" if seed is not None else ""
+            print(f"Model checkpoint path{seed_label}: {ckpt_path}")
+            if args.run_name:
+                score_out_rel = os.path.join(base_scoring_dir, args.run_name, f"seed{seed}") if seed is not None else os.path.join(base_scoring_dir, args.run_name)
+                log_sub = os.path.join("score", args.run_name, f"seed{seed}") if seed is not None else os.path.join("score", args.run_name)
+            else:
+                score_out_rel = os.path.join(base_scoring_dir, f"seed{seed}") if seed is not None else base_scoring_dir
+                log_sub = os.path.join("score", f"seed{seed}") if seed is not None else "score"
+
+            extra_parts = [f"--checkpoint {ckpt_path}", f"--output-dir {score_out_rel}"]
+            if seed is not None:
+                extra_parts.append(f"--seed {seed}")
+            extra_args = " ".join(extra_parts)
+
+            for sample in config.select(args.samples):
+                n_shards = len(shard_files(sample.files(), args.files_per_job))
+                if seed == seeds[0]:
+                    print(f"Sample '{sample.name}': {n_shards} shard(s)")
+                items.extend(
+                    f"{args.stage}, {sample.name}, {shard}, {log_sub}, {extra_args}"
+                    for shard in range(n_shards)
+                )
+        return items
 
     items = []
     for sample in config.select(args.samples):
         n_shards = len(shard_files(sample.files(), args.files_per_job))
         print(f"Sample '{sample.name}': {n_shards} shard(s)")
         items.extend(
-            f"{args.stage}, {sample.name}, {shard}" for shard in range(n_shards)
+            f"{args.stage}, {sample.name}, {shard}, produce, " for shard in range(n_shards)
         )
     return items
 
@@ -267,8 +311,6 @@ def job_arguments(args, config):
             pieces.append("--comet")
         if args.no_comet and "--no-comet" not in args.job_arguments:
             pieces.append("--no-comet")
-        if args.seed is not None and not args.seeds:
-            pieces.append(f"--seed {args.seed}")
         if args.resume is not None and "--resume" not in args.job_arguments:
             pieces.append(f"--resume {args.resume}" if args.resume != "auto" else "--resume")
             print(f"Training resume mode: {args.resume}")
@@ -278,16 +320,6 @@ def job_arguments(args, config):
             pieces.append(f"--save-every-n-epochs {args.save_every_n_epochs}")
     elif args.stage == "score":
         pieces = [f"--config {args.config}", f"--files-per-job {args.files_per_job}"]
-        ckpt_path = config.find_checkpoint(
-            args.checkpoint,
-            run_name=args.run_name,
-            seed=args.seed,
-            base_dir=args.eos_dir if args.output_location == "eos" else None,
-        )
-        print(f"Model: {config.model.spec}")
-        print(f"Model checkpoint path: {ckpt_path}")
-        if ckpt_path and "--checkpoint" not in args.job_arguments:
-            pieces.append(f"--checkpoint {ckpt_path}")
         if args.run_name and "--run-name" not in args.job_arguments:
             pieces.append(f"--run-name {args.run_name}")
     else:
@@ -308,11 +340,25 @@ def prepare_output_directories(args, config):
             target_processed = os.path.join(base_dir, prod_dir, sample.name, "processed")
             os.makedirs(target_processed, exist_ok=True)
             print(f"Pre-created directory: {target_processed}")
+        target_log_dir = os.path.join(args.log_dir, "produce")
+        os.makedirs(target_log_dir, exist_ok=True)
+        print(f"Pre-created log directory: {target_log_dir}")
     elif args.stage == "score":
-        scoring_dir = config.scoring.get("output_dir", "output_scores")
-        target_dir = os.path.join(base_dir, scoring_dir)
-        os.makedirs(target_dir, exist_ok=True)
-        print(f"Pre-created directory: {target_dir}")
+        base_scoring_dir = config.scoring.get("output_dir", "output_scores")
+        seeds = args.seeds if args.seeds else ([args.seed] if args.seed is not None else [None])
+        for seed in seeds:
+            if args.run_name:
+                score_out_rel = os.path.join(base_scoring_dir, args.run_name, f"seed{seed}") if seed is not None else os.path.join(base_scoring_dir, args.run_name)
+                log_sub = os.path.join("score", args.run_name, f"seed{seed}") if seed is not None else os.path.join("score", args.run_name)
+            else:
+                score_out_rel = os.path.join(base_scoring_dir, f"seed{seed}") if seed is not None else base_scoring_dir
+                log_sub = os.path.join("score", f"seed{seed}") if seed is not None else "score"
+            target_dir = os.path.join(base_dir, score_out_rel)
+            os.makedirs(target_dir, exist_ok=True)
+            print(f"Pre-created directory: {target_dir}")
+            target_log_dir = os.path.join(args.log_dir, log_sub)
+            os.makedirs(target_log_dir, exist_ok=True)
+            print(f"Pre-created log directory: {target_log_dir}")
     elif args.stage == "train":
         train_dir = config.training.get("output_dir", "training")
         run_name = args.run_name or config.model.spec.replace(".", "_")
@@ -321,14 +367,23 @@ def prepare_output_directories(args, config):
                 target_dir = os.path.join(base_dir, train_dir, f"{run_name}_seed{seed}")
                 os.makedirs(target_dir, exist_ok=True)
                 print(f"Pre-created directory: {target_dir}")
+                target_log_dir = os.path.join(args.log_dir, "train", run_name, f"seed{seed}")
+                os.makedirs(target_log_dir, exist_ok=True)
+                print(f"Pre-created log directory: {target_log_dir}")
         elif args.seed is not None:
             target_dir = os.path.join(base_dir, train_dir, f"{run_name}_seed{args.seed}")
             os.makedirs(target_dir, exist_ok=True)
             print(f"Pre-created directory: {target_dir}")
+            target_log_dir = os.path.join(args.log_dir, "train", run_name, f"seed{args.seed}")
+            os.makedirs(target_log_dir, exist_ok=True)
+            print(f"Pre-created log directory: {target_log_dir}")
         else:
             target_dir = os.path.join(base_dir, train_dir, run_name)
             os.makedirs(target_dir, exist_ok=True)
             print(f"Pre-created directory: {target_dir}")
+            target_log_dir = os.path.join(args.log_dir, "train", run_name)
+            os.makedirs(target_log_dir, exist_ok=True)
+            print(f"Pre-created log directory: {target_log_dir}")
 
 
 def main():
@@ -336,13 +391,9 @@ def main():
     config = load_config(os.path.join(SVJ_GNN_DIR, args.config))
 
     proxy_path = resolve_and_prepare_proxy(args.proxy)
-    if args.log_dir.startswith("/tmp"):
-        print(f"WARNING: --log-dir '{args.log_dir}' is in local /tmp. On CERN lxplus, HTCondor access points and worker nodes cannot access local /tmp. Output and log files will fail to transfer. Use an AFS path instead.")
 
     os.makedirs(args.submit_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
-    stage_log_dir = os.path.join(args.log_dir, args.stage)
-    os.makedirs(stage_log_dir, exist_ok=True)
     prepare_output_directories(args, config)
 
     tarball = os.path.join(args.submit_dir, "SVJ_GNN.tar.gz")
@@ -377,6 +428,7 @@ def main():
     )
 
     submit_file = template
+    queued_jobs = queue_items(args, config)
     for placeholder, value in (
         ("CONDOR_DIR", CONDOR_DIR),
         ("TARBALL", tarball),
@@ -389,7 +441,7 @@ def main():
         ("JOB_FLAVOUR", args.job_flavour),
         ("ENVIRONMENT_SETTING", env_setting),
         ("JOB_ARGUMENTS", job_arguments(args, config)),
-        ("QUEUE_ITEMS", "\n".join(queue_items(args, config))),
+        ("QUEUE_ITEMS", "\n".join(queued_jobs)),
     ):
         submit_file = submit_file.replace(placeholder, value)
 
@@ -403,6 +455,14 @@ def main():
         subprocess.run(["condor_submit", submit_path], check=True)
     else:
         print("[dry-run] JDL generated successfully. Condor submission skipped.")
+
+    log_dirs = sorted({
+        os.path.join(args.log_dir, item.split(", ", 4)[3])
+        for item in queued_jobs
+    })
+    print("Condor stdout, stderr, and event log files will be written under:")
+    for log_dir in log_dirs:
+        print(f"  {log_dir}/$(SAMPLE)_$(SHARD).stdout, .stderr, .log")
 
 
 if __name__ == "__main__":

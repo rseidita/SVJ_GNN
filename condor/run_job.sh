@@ -21,7 +21,7 @@ tar -xzf SVJ_GNN.tar.gz
 cd SVJ_GNN
 
 source setup_gae_env.sh
-
+GAE_CHUNK_CACHE_SIZE=1
 if [ -n "${GAE_OUTPUT_EOS}" ] && [ -d "${GAE_OUTPUT_EOS}" ]; then
     for d in $(ls "${GAE_OUTPUT_EOS}" 2>/dev/null); do
         if [ -d "${GAE_OUTPUT_EOS}/${d}" ] && [ ! -e "${d}" ]; then
@@ -48,18 +48,7 @@ case ${STAGE} in
             python train_gae.py "$@"
         fi
         ;;
-    contamination)
-        YEAR="${SAMPLE%%__*}"
-        BUCKET="${SAMPLE#*__}"
-        mkdir -p contamination_shards
-        python signal_contamination.py \
-            --years "${YEAR}" \
-            --bucket "${BUCKET}" \
-            --shard "${SHARD}" \
-            --output-json "contamination_shards/${SAMPLE}_${SHARD}.json" \
-            "$@"
-        OUTPUTS="contamination_shards"
-        ;;
+    
     *)
         echo "Unknown stage '${STAGE}'; expected produce, score, train or contamination"
         exit 1
