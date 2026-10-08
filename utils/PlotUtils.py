@@ -1,3 +1,5 @@
+import re
+from matplotlib.lines import Line2D
 from numpy import random
 import networkx as nx
 import numpy as np
@@ -160,11 +162,29 @@ def set_cms_style():
     plt.style.use(hep.style.CMS)
 
 
-def cms_label(ax, label="Preliminary", lumi=None, com=13.6):
+def cms_label(ax, label="Preliminary", lumi=None, year=None, com=None):
     """Draw the CMS label on *ax*."""
     import mplhep as hep
 
-    hep.cms.label(label, ax=ax, lumi=lumi, com=com, data=True)
+    if com is None:
+        com = 13 if str(year) in ("2016", "2017", "2018") else (13.6 if str(year) in ("2022", "2023", "2024") else 13)
+    hep.cms.label(label, ax=ax, lumi=lumi, year=year, com=com, data=True)
+
+
+def infer_year_lumi(samples_or_labels, year=None, lumi=None):
+    """Infer year and corresponding luminosity from sample names if not provided."""
+    if year is None and samples_or_labels:
+        text = " ".join(str(s) for s in samples_or_labels)
+        if "2018" in text:
+            year = 2018
+        elif "2017" in text:
+            year = 2017
+        elif "2016" in text:
+            year = 2016
+    if lumi is None and year is not None:
+        lumi_defaults = {2016: 36.3, 2017: 41.5, 2018: 59.8, "2016": 36.3, "2017": 41.5, "2018": 59.8}
+        lumi = lumi_defaults.get(year)
+    return year, lumi
 
 
 def to_th1(counts, edges, name, title=""):
@@ -198,14 +218,12 @@ def _save(figure, file_name, formats=("pdf",), show=False):
     plt.close(figure)
 
 
-def plot_loss_curves(history, file_name, formats=("pdf",), show=False):
+def plot_loss_curves(history, file_name, formats=("pdf",), show=False, lumi=None, year=None):
     """Per-batch and per-epoch training curves from a training history."""
     import mplhep as hep
 
     set_cms_style()
-    figure, (batch_axes, epoch_axes) = plt.subplots(
-        1, 2, figsize=(18, 7)
-    )
+    figure, (batch_axes, epoch_axes) = plt.subplots(1, 2, figsize=(18, 7))
 
     batch_axes.plot(history["batch_total"], label="Total")
     batch_axes.plot(history["batch_edges"], label="Edges")
@@ -213,8 +231,8 @@ def plot_loss_curves(history, file_name, formats=("pdf",), show=False):
     batch_axes.set_xlabel("Training batch")
     batch_axes.set_ylabel("Loss")
     batch_axes.set_yscale("log")
-    batch_axes.legend()
-    cms_label(batch_axes)
+    batch_axes.legend(fontsize=9.5)
+    cms_label(batch_axes, lumi=lumi, year=year)
 
     epochs = range(len(history["epoch_train"]))
     train_totals = [values[0] for values in history["epoch_train"]]
@@ -224,170 +242,338 @@ def plot_loss_curves(history, file_name, formats=("pdf",), show=False):
         for values in history.get("epoch_validation", [])
     ]
     if validation and not np.all(np.isnan(validation)):
-        epoch_axes.plot(
-            epochs, validation, marker="s", label="Validation"
-        )
+        epoch_axes.plot(epochs, validation, marker="s", label="Validation")
     epoch_axes.set_xlabel("Epoch")
     epoch_axes.set_ylabel("Total loss")
     epoch_axes.set_yscale("log")
-    epoch_axes.legend()
-    cms_label(epoch_axes)
+    epoch_axes.legend(fontsize=9.5)
+    cms_label(epoch_axes, lumi=lumi, year=year)
 
     _save(figure, file_name, formats, show)
 
 
-def plot_score_distributions(
-    samples,
-    file_name,
-    bins=50,
-    density=True,
-    formats=("pdf",),
-    show=False,
-):
-    """Reconstruction-loss histograms for every sample, overlaid.
+def parse_signal_params(label):
+    """Extract mMed (m_{Z'}), mDark, rinv, year from a sample string/label."""
+    if not label:
+        return {}
+    params = {}
+    mmed_match = re.search(r"mMed-(\d+)", label)
+    if mmed_match:
+        params["mMed"] = int(mmed_match.group(1))
+    mdark_match = re.search(r"mDark-(\d+)", label)
+    if mdark_match:
+        params["mDark"] = int(mdark_match.group(1))
+    rinv_match = re.search(r"rinv-([0-9.]+)", label)
+    if rinv_match:
+        params["rinv"] = float(rinv_match.group(1))
+    year_match = re.search(r"(201[678])", label)
+    if year_match:
+        params["year"] = year_match.group(1)
+    return params
 
-    *samples* maps a label to ``(scores, weights)``. Returns the TH1
-    histograms, so they can be written to a ROOT file.
+
+def format_signal_label(label, include_year=False):
+    """Format a signal label into clean LaTeX, e.g. '$m_{Z'}=600, r_{inv}=0.7$'."""
+    params = parse_signal_params(label)
+    parts = []
+    if "mMed" in params:
+        parts.append(f"m_{{Z'}} = {params['mMed']}")
+    if "rinv" in params:
+        parts.append(f"r_{{inv}} = {params['rinv']}")
+    if parts:
+        formatted = "$" + ", ".join(parts) + "$"
+        if include_year and "year" in params:
+            formatted += f" ({params['year']})"
+        return formatted
+    return label
+
+
+def get_signal_style_maps(signal_labels):
+    """Build color and linestyle maps for signal labels.
+
+    mMed gets a viridis color (ordered ascending), and rinv gets a distinct linestyle.
+    Returns (color_map, linestyle_map, is_grid).
     """
+    parsed = {lbl: parse_signal_params(lbl) for lbl in signal_labels if lbl}
+    has_grid = any("mMed" in p and "rinv" in p for p in parsed.values())
+    if not has_grid:
+        return {}, {}, False
+
+    unique_mmed = sorted({p["mMed"] for p in parsed.values() if "mMed" in p})
+    unique_rinv = sorted({p["rinv"] for p in parsed.values() if "rinv" in p})
+
+    cmap = plt.cm.viridis
+    n_m = len(unique_mmed)
+    color_map = {
+        m: cmap(i / max(1, n_m - 1) * 0.92) if n_m > 1 else cmap(0.5)
+        for i, m in enumerate(unique_mmed)
+    }
+
+    style_choices = ["-", "--", ":", "-."]
+    rinv_default_styles = {0.3: "-", 0.5: "--", 0.7: ":"}
+    linestyle_map = {}
+    for i, r in enumerate(unique_rinv):
+        linestyle_map[r] = rinv_default_styles.get(r, style_choices[i % len(style_choices)])
+
+    return color_map, linestyle_map, True
+
+
+def add_combined_legend(axes, color_map, linestyle_map, other_handles=None, loc="upper right", fontsize=8.5):
+    """Add a single combined legend box with sample handles, m_{Z'} colors, and r_{inv} linestyles in one column."""
+    handles = []
+    if other_handles:
+        handles.extend(other_handles)
+    for m, c in sorted(color_map.items()):
+        handles.append(Line2D([0], [0], color=c, linestyle="-", linewidth=2.5, label=f"$m_{{Z'}} = {m}$"))
+    for r, ls in sorted(linestyle_map.items()):
+        handles.append(Line2D([0], [0], color="black", linestyle=ls, linewidth=2, label=f"$r_{{inv}} = {r}$"))
+    return axes.legend(handles=handles, loc=loc, ncol=1, fontsize=fontsize, frameon=True, labelspacing=0.25, handletextpad=0.5, borderpad=0.35)
+
+
+def plot_score_distributions(samples, file_name, bins=100, density=True, formats=("pdf",), show=False, lumi=None, year=None):
+    """Reconstruction-loss histograms for every sample, overlaid."""
     import mplhep as hep
 
     set_cms_style()
-
-    all_scores = np.concatenate(
-        [np.asarray(scores) for scores, _ in samples.values()]
-    )
-    edges = np.histogram_bin_edges(all_scores, bins=bins)
-
+    year, lumi = infer_year_lumi(samples.keys(), year=year, lumi=lumi)
+    edges = np.linspace(0.0, 0.2, bins + 1)
     figure, axes = plt.subplots(figsize=(10, 8))
     histograms = {}
-    for label, (scores, weights) in samples.items():
-        counts, _ = weighted_histogram(
-            scores, edges, weights=weights, density=density
-        )
-        hep.histplot(
-            counts, edges, ax=axes, label=label, histtype="step", linewidth=2
-        )
-        histograms[f"score_{label}"] = to_th1(
-            counts, edges, f"score_{label}", "Reconstruction loss"
-        )
 
+    signal_labels = [label for label in samples if parse_signal_params(label).get("mMed") is not None]
+    color_map, linestyle_map, is_grid = get_signal_style_maps(signal_labels)
+
+    other_handles = []
+    for label, (scores, weights) in samples.items():
+        clipped_scores = np.clip(scores, edges[0], edges[-1])
+        counts, _ = weighted_histogram(clipped_scores, edges, weights=weights, density=density)
+        histograms[f"score_{label}"] = to_th1(counts, edges, f"score_{label}", "Reconstruction loss")
+
+        params = parse_signal_params(label)
+        if is_grid and "mMed" in params and "rinv" in params and len(signal_labels) > 3:
+            hep.histplot(counts, edges, ax=axes, color=color_map[params["mMed"]], linestyle=linestyle_map[params["rinv"]], histtype="step", linewidth=1.5)
+        else:
+            clean_label = format_signal_label(label) if params else ("QCD" if label.lower() == "qcd" else ("Data" if label.lower() == "data" else label))
+            color = "black" if label.lower() == "data" else ("tab:blue" if label.lower() == "qcd" else None)
+            hep.histplot(counts, edges, ax=axes, label=clean_label, color=color, histtype="step", linewidth=2)
+            if is_grid and len(signal_labels) > 3:
+                other_handles.append(Line2D([0], [0], color=color if color is not None else "black", linestyle="-", linewidth=2, label=clean_label))
+
+    axes.set_xlim(0.0, 0.2)
     axes.set_xlabel("Reconstruction loss")
     axes.set_ylabel("Normalized events" if density else "Events")
-    axes.legend()
-    cms_label(axes)
+
+    if is_grid and len(signal_labels) > 3:
+        add_combined_legend(axes, color_map, linestyle_map, other_handles=other_handles, loc="upper right", fontsize=8.5)
+    else:
+        axes.legend(fontsize=8.5, loc="upper right", ncol=1)
+
+    cms_label(axes, lumi=lumi, year=year)
     _save(figure, file_name, formats, show)
     return histograms
 
 
-def plot_loss_efficiency(
-    samples, file_name, formats=("pdf",), show=False
-):
-    """Normalized number of events surviving a cut on the loss.
-
-    *samples* maps a label to ``(scores, weights)``. The curve is the
-    weighted fraction of entries with a loss above the threshold.
-    """
+def plot_loss_efficiency(samples, file_name, formats=("pdf",), show=False, lumi=None, year=None):
+    """Normalized number of events surviving a cut on the loss."""
     set_cms_style()
+    year, lumi = infer_year_lumi(samples.keys(), year=year, lumi=lumi)
     figure, axes = plt.subplots(figsize=(10, 8))
 
+    signal_labels = [label for label in samples if parse_signal_params(label).get("mMed") is not None]
+    color_map, linestyle_map, is_grid = get_signal_style_maps(signal_labels)
+
+    other_handles = []
     for label, (scores, weights) in samples.items():
         thresholds, efficiency = efficiency_curve(scores, weights)
-        axes.plot(thresholds, efficiency, label=label, linewidth=2)
+        params = parse_signal_params(label)
+        if is_grid and "mMed" in params and "rinv" in params and len(signal_labels) > 3:
+            axes.plot(thresholds, efficiency, color=color_map[params["mMed"]], linestyle=linestyle_map[params["rinv"]], linewidth=1.5)
+        else:
+            clean_label = format_signal_label(label) if params else ("QCD" if label.lower() == "qcd" else ("Data" if label.lower() == "data" else label))
+            color = "black" if label.lower() == "data" else ("tab:blue" if label.lower() == "qcd" else None)
+            axes.plot(thresholds, efficiency, label=clean_label, color=color, linewidth=2)
+            if is_grid and len(signal_labels) > 3:
+                other_handles.append(Line2D([0], [0], color=color if color is not None else "black", linestyle="-", linewidth=2, label=clean_label))
 
+    axes.set_xlim(0.0, 1.0)
     axes.set_xlabel("Reconstruction loss threshold")
     axes.set_ylabel("Normalized number of events")
     axes.set_yscale("log")
-    axes.legend()
-    cms_label(axes)
+
+    if is_grid and len(signal_labels) > 3:
+        add_combined_legend(axes, color_map, linestyle_map, other_handles=other_handles, loc="lower left", fontsize=8.5)
+    else:
+        axes.legend(fontsize=8.5, loc="lower left", ncol=1)
+
+    cms_label(axes, lumi=lumi, year=year)
     _save(figure, file_name, formats, show)
 
 
 def _signal_curves(scores_signal, weights_signal):
-    """``[(label, scores, weights)]`` from one signal or a dict of signals.
-
-    A dict maps a label to ``(scores, weights)`` and draws one curve per
-    signal point; a plain array draws a single unlabelled curve.
-    """
+    """``[(label, scores, weights)]`` from one signal or a dict of signals."""
     if isinstance(scores_signal, dict):
-        return [
-            (label, scores, weights)
-            for label, (scores, weights) in scores_signal.items()
-        ]
+        return [(label, scores, weights) for label, (scores, weights) in scores_signal.items()]
     return [(None, scores_signal, weights_signal)]
 
 
-def plot_roc(
-    scores_signal,
-    scores_background,
-    file_name,
-    weights_signal=None,
-    weights_background=None,
-    formats=("pdf",),
-    show=False,
-):
-    """Signal against background efficiency, with the area under the curve.
-
-    ``scores_signal`` may be a ``{label: (scores, weights)}`` dict to overlay
-    one curve per signal point against the same background.
-    """
+def plot_roc(scores_signal, scores_background, file_name, weights_signal=None, weights_background=None, formats=("pdf",), show=False, lumi=None, year=None):
+    """Signal against background efficiency, with the area under the curve."""
     set_cms_style()
     figure, axes = plt.subplots(figsize=(10, 8))
     curves = {}
-    for label, scores, weights in _signal_curves(scores_signal, weights_signal):
-        fpr, tpr, _ = roc_curve(
-            scores, scores_background, weights, weights_background
-        )
+    aucs = {}
+    signal_items = _signal_curves(scores_signal, weights_signal)
+    signal_labels = [label for label, _, _ in signal_items if label is not None]
+    color_map, linestyle_map, is_grid = get_signal_style_maps(signal_labels)
+    year, lumi = infer_year_lumi(signal_labels, year=year, lumi=lumi)
+
+    for label, scores, weights in signal_items:
+        fpr, tpr, _ = roc_curve(scores, scores_background, weights, weights_background)
+        auc_val = auc(fpr, tpr)
         curves[label] = (fpr, tpr)
-        text = f"AUC = {auc(fpr, tpr):.3f}"
-        axes.plot(
-            fpr, tpr, linewidth=2,
-            label=text if label is None else f"{label} ({text})",
-        )
+        aucs[label] = auc_val
+
+        plot_kwargs = {"linewidth": 2}
+        params = parse_signal_params(label) if label else {}
+        if is_grid and "mMed" in params and "rinv" in params and len(signal_labels) > 3:
+            plot_kwargs["color"] = color_map[params["mMed"]]
+            plot_kwargs["linestyle"] = linestyle_map[params["rinv"]]
+        else:
+            text = f"AUC = {auc_val:.3f}"
+            clean_lbl = format_signal_label(label) if label else None
+            plot_kwargs["label"] = text if clean_lbl is None else f"{clean_lbl} ({text})"
+
+        axes.plot(fpr, tpr, **plot_kwargs)
+
     axes.plot([0, 1], [0, 1], linestyle="--", color="grey", linewidth=1)
-    axes.set_xlabel("Background efficiency")
+    axes.set_xlim(0.0, 1.0)
+    axes.set_ylim(0.0, 1.0)
+    axes.set_xlabel("False positive rate")
     axes.set_ylabel("Signal efficiency")
-    axes.legend(fontsize="small")
-    cms_label(axes)
+
+    if is_grid and len(signal_labels) > 3:
+        add_combined_legend(axes, color_map, linestyle_map, loc="lower right", fontsize=8.5)
+    else:
+        axes.legend(fontsize=8.5, loc="lower right", ncol=1)
+
+    cms_label(axes, lumi=lumi, year=year)
     _save(figure, file_name, formats, show)
-    if len(curves) == 1:
-        return next(iter(curves.values()))
-    return curves
+    return curves, aucs
 
 
-def plot_sic_vs_fpr(
-    scores_signal,
-    scores_background,
-    file_name,
-    weights_signal=None,
-    weights_background=None,
-    min_fpr=1e-4,
-    formats=("pdf",),
-    show=False,
-):
-    """Significance improvement against background efficiency.
-
-    Accepts the same single-signal or ``{label: (scores, weights)}`` inputs as
-    :func:`plot_roc`.
-    """
+def plot_sic_vs_fpr(scores_signal, scores_background, file_name, weights_signal=None, weights_background=None, min_fpr=1e-4, formats=("pdf",), show=False, lumi=None, year=None):
+    """Significance improvement against background efficiency."""
     set_cms_style()
     figure, axes = plt.subplots(figsize=(10, 8))
-    for label, scores, weights in _signal_curves(scores_signal, weights_signal):
-        fpr, tpr, _ = roc_curve(
-            scores, scores_background, weights, weights_background
-        )
+    signal_items = _signal_curves(scores_signal, weights_signal)
+    signal_labels = [label for label, _, _ in signal_items if label is not None]
+    color_map, linestyle_map, is_grid = get_signal_style_maps(signal_labels)
+    year, lumi = infer_year_lumi(signal_labels, year=year, lumi=lumi)
+
+    for label, scores, weights in signal_items:
+        fpr, tpr, _ = roc_curve(scores, scores_background, weights, weights_background)
         fpr_values, sic_values = sic(tpr, fpr, min_fpr=min_fpr)
-        text = f"max SIC = {max_sic(tpr, fpr, min_fpr=min_fpr):.2f}"
-        axes.plot(
-            fpr_values, sic_values, linewidth=2,
-            label=text if label is None else f"{label} ({text})",
-        )
+        plot_kwargs = {"linewidth": 2}
+        params = parse_signal_params(label) if label else {}
+        if is_grid and "mMed" in params and "rinv" in params and len(signal_labels) > 3:
+            plot_kwargs["color"] = color_map[params["mMed"]]
+            plot_kwargs["linestyle"] = linestyle_map[params["rinv"]]
+        else:
+            text = f"max SIC = {max_sic(tpr, fpr, min_fpr=min_fpr):.2f}"
+            clean_lbl = format_signal_label(label) if label else None
+            plot_kwargs["label"] = text if clean_lbl is None else f"{clean_lbl} ({text})"
+
+        axes.plot(fpr_values, sic_values, **plot_kwargs)
+
     axes.axhline(1.0, linestyle="--", color="grey", linewidth=1)
     axes.set_xscale("log")
     axes.set_xlabel("Background efficiency")
     axes.set_ylabel(r"$\varepsilon_S/\sqrt{\varepsilon_B}$")
-    axes.legend(fontsize="small")
-    cms_label(axes)
+
+    if is_grid and len(signal_labels) > 3:
+        add_combined_legend(axes, color_map, linestyle_map, loc="upper left", fontsize=8.5)
+    else:
+        axes.legend(fontsize=8.5, loc="upper left", ncol=1)
+
+    cms_label(axes, lumi=lumi, year=year)
     _save(figure, file_name, formats, show)
+
+
+def plot_auc_2d(aucs, file_name, formats=("pdf",), show=False, lumi=None, year=None):
+    """2D AUC heatmap with rinv on y-axis and m_{Z'} on x-axis."""
+    grid = {}
+    for label, auc_val in aucs.items():
+        params = parse_signal_params(label)
+        if "mMed" in params and "rinv" in params:
+            grid[(params["mMed"], params["rinv"])] = auc_val
+
+    if not grid:
+        print("No (mMed, rinv) signal parameters found; skipping 2D AUC plot")
+        return None
+
+    year, lumi = infer_year_lumi(aucs.keys(), year=year, lumi=lumi)
+    unique_mmed = sorted(set(m for m, _ in grid.keys()))
+    unique_rinv = sorted(set(r for _, r in grid.keys()))
+
+    matrix = np.full((len(unique_rinv), len(unique_mmed)), np.nan)
+    for (m, r), auc_val in grid.items():
+        row = unique_rinv.index(r)
+        col = unique_mmed.index(m)
+        matrix[row, col] = auc_val
+
+    set_cms_style()
+    figure, axes = plt.subplots(figsize=(11, 8))
+
+    val_min = float(np.nanmin(matrix))
+    val_max = float(np.nanmax(matrix))
+    im = axes.imshow(matrix, origin="lower", aspect="auto", cmap="viridis", vmin=max(0.0, val_min - 0.03), vmax=min(1.0, val_max + 0.03))
+
+    axes.set_xticks(range(len(unique_mmed)))
+    axes.set_xticklabels([str(m) for m in unique_mmed], rotation=45 if len(unique_mmed) > 8 else 0)
+    axes.set_yticks(range(len(unique_rinv)))
+    axes.set_yticklabels([f"{r:.1f}" for r in unique_rinv])
+    axes.set_xlabel(r"$m_{Z'}$ [GeV]")
+    axes.set_ylabel(r"$r_{\mathrm{inv}}$")
+
+    v_min, v_max = im.get_clim()
+    mid = (v_min + v_max) / 2.0
+    for i in range(len(unique_rinv)):
+        for j in range(len(unique_mmed)):
+            val = matrix[i, j]
+            if not np.isnan(val):
+                text_color = "white" if val < mid else "black"
+                axes.text(j, i, f"{val:.3f}", ha="center", va="center", color=text_color, fontweight="bold", fontsize=12)
+
+    cbar = figure.colorbar(im, ax=axes, pad=0.03)
+    cbar.set_label("AUC", fontsize=14)
+
+    cms_label(axes, lumi=lumi, year=year)
+    _save(figure, file_name, formats, show)
+
+    th2 = None
+    try:
+        import ROOT
+
+        def get_bin_edges(vals):
+            vals = np.array(vals, dtype=float)
+            if len(vals) == 1:
+                return np.array([vals[0] - 0.5, vals[0] + 0.5])
+            diffs = np.diff(vals)
+            inner = vals[:-1] + diffs / 2.0
+            return np.concatenate([[vals[0] - diffs[0] / 2.0], inner, [vals[-1] + diffs[-1] / 2.0]])
+
+        x_edges = get_bin_edges(unique_mmed)
+        y_edges = get_bin_edges(unique_rinv)
+        th2 = ROOT.TH2D("auc_2d", "2D AUC;m_{Z'} [GeV];r_{inv}", len(unique_mmed), x_edges, len(unique_rinv), y_edges)
+        for i, r in enumerate(unique_rinv):
+            for j, m in enumerate(unique_mmed):
+                val = matrix[i, j]
+                if not np.isnan(val):
+                    th2.SetBinContent(j + 1, i + 1, float(val))
+    except Exception as exc:
+        print(f"Could not build ROOT TH2D: {exc}")
+
+    return th2
 
 
 def plot_feature_residuals(
