@@ -219,37 +219,54 @@ def _save(figure, file_name, formats=("pdf",), show=False):
 
 
 def plot_loss_curves(history, file_name, formats=("pdf",), show=False, lumi=None, year=None):
-    """Per-batch and per-epoch training curves from a training history."""
+    """Per-epoch Total, Edge, and Node loss curves comparing Train, Validation, and Test."""
     import mplhep as hep
 
     set_cms_style()
-    figure, (batch_axes, epoch_axes) = plt.subplots(1, 2, figsize=(18, 7))
+    figure, (ax_tot, ax_edge, ax_node) = plt.subplots(1, 3, figsize=(22, 6.5))
 
-    batch_axes.plot(history["batch_total"], label="Total")
-    batch_axes.plot(history["batch_edges"], label="Edges")
-    batch_axes.plot(history["batch_nodes"], label="Nodes")
-    batch_axes.set_xlabel("Training batch")
-    batch_axes.set_ylabel("Loss")
-    batch_axes.set_yscale("log")
-    batch_axes.legend(fontsize=9.5)
-    cms_label(batch_axes, lumi=lumi, year=year)
-
-    epochs = range(len(history["epoch_train"]))
-    train_totals = [values[0] for values in history["epoch_train"]]
-    epoch_axes.plot(epochs, train_totals, marker="o", label="Train")
-    validation = [
-        values[0] if values is not None else np.nan
-        for values in history.get("epoch_validation", [])
+    panels = [
+        (ax_tot, 0, "Total Loss", r"$\mathcal{L}_{\mathrm{total}}$"),
+        (ax_edge, 1, "Edge Reconstruction Loss", r"$\mathcal{L}_{\mathrm{edges}}$"),
+        (ax_node, 2, "Node Feature Loss", r"$\mathcal{L}_{\mathrm{nodes}}$"),
     ]
-    if validation and not np.all(np.isnan(validation)):
-        epoch_axes.plot(epochs, validation, marker="s", label="Validation")
-    epoch_axes.set_xlabel("Epoch")
-    epoch_axes.set_ylabel("Total loss")
-    epoch_axes.set_yscale("log")
-    epoch_axes.legend(fontsize=9.5)
-    cms_label(epoch_axes, lumi=lumi, year=year)
 
+    n_epochs = len(history.get("epoch_train", []))
+    epochs = list(range(n_epochs))
+
+    for ax, term_idx, title, ylabel in panels:
+        train_vals = [v[term_idx] if v is not None else np.nan for v in history.get("epoch_train", [])]
+        if train_vals and not np.all(np.isnan(train_vals)):
+            ax.plot(epochs, train_vals, marker="o", markersize=3.5, label="Train", color="royalblue", linewidth=1.8)
+
+        val_vals = [v[term_idx] if v is not None else np.nan for v in history.get("epoch_validation", [])]
+        if val_vals and not np.all(np.isnan(val_vals)):
+            ax.plot(epochs, val_vals, marker="s", markersize=3.5, label="Validation", color="darkorange", linewidth=1.8)
+
+        if "epoch_test" in history and history["epoch_test"]:
+            test_vals = [v[term_idx] if v is not None else np.nan for v in history["epoch_test"]]
+            if not np.all(np.isnan(test_vals)):
+                ax.plot(epochs, test_vals, marker="^", markersize=3.5, label="Test", color="forestgreen", linewidth=1.8)
+        elif "test" in history and history["test"] is not None and len(history["test"]) > term_idx:
+            test_scalar = history["test"][term_idx]
+            if test_scalar is not None and not np.isnan(test_scalar):
+                ax.axhline(test_scalar, color="forestgreen", linestyle="--", linewidth=1.8, label=f"Test (final: {test_scalar:.4f})")
+                if len(epochs) > 0:
+                    ax.plot([epochs[-1]], [test_scalar], marker="^", markersize=7, color="forestgreen")
+
+        ax.text(0.06, 0.90, title, transform=ax.transAxes, fontsize=12, fontweight="bold")
+        ax.set_xlabel("Epoch", fontsize=12)
+        ax.set_ylabel(ylabel, fontsize=16)
+        ax.tick_params(axis="both", labelsize=10)
+        all_vals = [v for v in train_vals + val_vals if not np.isnan(v)]
+        if all_vals and min(all_vals) > 0:
+            ax.set_yscale("log")
+        ax.legend(fontsize=9.5, loc="upper right")
+        cms_label(ax, lumi=lumi, year=year)
+
+    figure.tight_layout()
     _save(figure, file_name, formats, show)
+
 
 
 def parse_signal_params(label):
@@ -491,7 +508,7 @@ def plot_sic_vs_fpr(scores_signal, scores_background, file_name, weights_signal=
     axes.set_ylabel(r"$\varepsilon_S/\sqrt{\varepsilon_B}$")
 
     if is_grid and len(signal_labels) > 3:
-        add_combined_legend(axes, color_map, linestyle_map, loc="upper left", fontsize=8.5)
+        add_combined_legend(axes, color_map, linestyle_map, loc="upper left", fontsize=12)
     else:
         axes.legend(fontsize=8.5, loc="upper left", ncol=1)
 
@@ -576,18 +593,25 @@ def plot_auc_2d(aucs, file_name, formats=("pdf",), show=False, lumi=None, year=N
     return th2
 
 
-def plot_feature_residuals(
-    model,
-    loader,
-    file_name,
-    device="cpu",
-    max_batches=20,
-    bins=50,
-    formats=("pdf",),
-    show=False,
-):
+def get_lund_feature_names(n_features, config=None):
+    """Return physical Lund variable names matching feature matrix dimension."""
+    if n_features == 12:
+        return [r"$\ln(k_T)$", r"$\ln(1/\Delta)$", r"$\ln(z)$", r"$\psi$", r"$p_T$", r"$\eta$", r"$\phi$", r"$m$", r"$f_e$", r"$f_\mu$", r"$f_\gamma$", r"$f_{\mathrm{had}}$"]
+    if n_features == 9:
+        if config and getattr(config, "graph", {}).get("save_4vectors_in_lund_tree", False) and not getattr(config, "graph", {}).get("save_energy_fractions", False):
+            return [r"$\ln(k_T)$", r"$\ln(1/\Delta)$", r"$\ln(z)$", r"$\psi$", r"$p_T$", r"$\eta$", r"$\phi$", r"$m$", r"$\dots$"]
+        return [r"$\ln(k_T)$", r"$\ln(1/\Delta)$", r"$\ln(z)$", r"$\psi$", r"$m$", r"$f_e$", r"$f_\mu$", r"$f_\gamma$", r"$f_{\mathrm{had}}$"]
+    if n_features == 5:
+        return [r"$\ln(k_T)$", r"$\ln(1/\Delta)$", r"$\ln(z)$", r"$\psi$", r"$m$"]
+    if n_features == 3:
+        return [r"$\ln(k_T)$", r"$\ln(1/\Delta)$", r"$\ln(z)$"]
+    return [f"Feature {i}" for i in range(n_features)]
+
+
+def plot_feature_residuals(model, loader, file_name, device="cpu", max_batches=20, bins=50, formats=("pdf",), show=False, lumi=None, year=None, config=None):
     """Input minus reconstructed node feature, one panel per feature."""
     import torch
+    import mplhep as hep
 
     if not callable(getattr(model, "forward", None)):
         print("Model has no forward method; skipping residual plot")
@@ -601,12 +625,14 @@ def plot_feature_residuals(
             if index >= max_batches:
                 break
             batch = batch.to(device)
-            reconstructed = model(batch.x, batch.edge_index)
-            if isinstance(reconstructed, tuple):
-                reconstructed = reconstructed[0]
-            residuals.append(
-                (batch.x - reconstructed).detach().cpu().numpy()
-            )
+            if hasattr(model, "encoder") and hasattr(model, "features_decoder"):
+                z = model.encoder(batch.x, batch.edge_index)
+                reconstructed = model.features_decoder(z, batch.edge_index)
+            else:
+                reconstructed = model(batch.x, batch.edge_index)
+                if isinstance(reconstructed, tuple):
+                    reconstructed = reconstructed[0]
+            residuals.append((batch.x - reconstructed).detach().cpu().numpy())
 
     if not residuals:
         print("No batches available; skipping residual plot")
@@ -614,38 +640,30 @@ def plot_feature_residuals(
 
     residuals = np.concatenate(residuals)
     n_features = residuals.shape[1]
+    feature_names = get_lund_feature_names(n_features, config)
     n_columns = min(3, n_features)
     n_rows = int(np.ceil(n_features / n_columns))
-    figure, axes = plt.subplots(
-        n_rows, n_columns, figsize=(6 * n_columns, 5 * n_rows), squeeze=False
-    )
-
-    import mplhep as hep
+    figure, axes = plt.subplots(n_rows, n_columns, figsize=(6 * n_columns, 5 * n_rows), squeeze=False)
 
     for feature in range(n_features):
         axis = axes[feature // n_columns][feature % n_columns]
         counts, edges = np.histogram(residuals[:, feature], bins=bins)
-        hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2)
-        axis.set_xlabel(f"Feature {feature} residual")
-        axis.set_ylabel("Nodes")
+        hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2, color="royalblue")
+        axis.set_xlabel(f"Residual: {feature_names[feature]}")
+        axis.set_ylabel("Nodes", fontsize=16)
+        axis.tick_params(axis="y", labelsize=10)
     for empty in range(n_features, n_rows * n_columns):
         axes[empty // n_columns][empty % n_columns].axis("off")
 
+    cms_label(axes[0, 0], lumi=lumi, year=year)
+    figure.tight_layout()
     _save(figure, file_name, formats, show)
 
 
-def plot_latent_distributions(
-    model,
-    loader,
-    file_name,
-    device="cpu",
-    max_batches=20,
-    bins=50,
-    formats=("pdf",),
-    show=False,
-):
+def plot_latent_distributions(model, loader, file_name, device="cpu", max_batches=20, bins=50, formats=("pdf",), show=False, lumi=None, year=None):
     """Distribution of every latent dimension of the encoder."""
     import torch
+    import mplhep as hep
 
     encoder = getattr(model, "encoder", None)
     if encoder is None:
@@ -660,9 +678,7 @@ def plot_latent_distributions(
             if index >= max_batches:
                 break
             batch = batch.to(device)
-            latents.append(
-                encoder(batch.x, batch.edge_index).detach().cpu().numpy()
-            )
+            latents.append(encoder(batch.x, batch.edge_index).detach().cpu().numpy())
 
     if not latents:
         print("No batches available; skipping latent plot")
@@ -672,19 +688,431 @@ def plot_latent_distributions(
     n_dimensions = latents.shape[1]
     n_columns = min(4, n_dimensions)
     n_rows = int(np.ceil(n_dimensions / n_columns))
-    figure, axes = plt.subplots(
-        n_rows, n_columns, figsize=(5 * n_columns, 4 * n_rows), squeeze=False
-    )
-
-    import mplhep as hep
+    figure, axes = plt.subplots(n_rows, n_columns, figsize=(5 * n_columns, 4 * n_rows), squeeze=False)
 
     for dimension in range(n_dimensions):
         axis = axes[dimension // n_columns][dimension % n_columns]
         counts, edges = np.histogram(latents[:, dimension], bins=bins)
-        hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2)
+        hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2, color="teal")
         axis.set_xlabel(f"Latent {dimension}")
-        axis.set_ylabel("Nodes")
+        axis.set_ylabel("Nodes", fontsize=16)
+        axis.tick_params(axis="y", labelsize=10)
     for empty in range(n_dimensions, n_rows * n_columns):
         axes[empty // n_columns][empty % n_columns].axis("off")
 
+    cms_label(axes[0, 0], lumi=lumi, year=year)
+    figure.tight_layout()
+    _save(figure, file_name, formats, show)
+
+
+def plot_feature_correlations(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None, config=None):
+    """2D profiles of true input vs reconstructed features with y=x identity lines."""
+    import torch
+
+    set_cms_style()
+    model.eval()
+    true_x, reco_x = [], []
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            if index >= max_batches:
+                break
+            batch = batch.to(device)
+            if hasattr(model, "encoder") and hasattr(model, "features_decoder"):
+                z = model.encoder(batch.x, batch.edge_index)
+                reconstructed = model.features_decoder(z, batch.edge_index)
+            else:
+                out = model(batch.x, batch.edge_index)
+                reconstructed = out[0] if isinstance(out, tuple) else out
+            true_x.append(batch.x.detach().cpu().numpy())
+            reco_x.append(reconstructed.detach().cpu().numpy())
+
+    if not true_x:
+        return
+
+    true_x = np.concatenate(true_x)
+    reco_x = np.concatenate(reco_x)
+    n_features = true_x.shape[1]
+    feature_names = get_lund_feature_names(n_features, config)
+
+    n_columns = min(4, n_features)
+    n_rows = int(np.ceil(n_features / n_columns))
+    figure, axes = plt.subplots(n_rows, n_columns, figsize=(4.8 * n_columns, 4.4 * n_rows), squeeze=False)
+
+    for f_idx in range(n_features):
+        ax = axes[f_idx // n_columns][f_idx % n_columns]
+        x_val = true_x[:, f_idx]
+        y_val = reco_x[:, f_idx]
+
+        mask = np.isfinite(x_val) & np.isfinite(y_val)
+        corr = np.corrcoef(x_val[mask], y_val[mask])[0, 1] if np.sum(mask) > 1 else np.nan
+
+        ax.hexbin(x_val[mask], y_val[mask], gridsize=35, cmap="Blues", mincnt=1, bins="log")
+
+        lo = float(min(np.nanpercentile(x_val[mask], 1), np.nanpercentile(y_val[mask], 1)))
+        hi = float(max(np.nanpercentile(x_val[mask], 99), np.nanpercentile(y_val[mask], 99)))
+        if lo == hi:
+            lo, hi = lo - 1.0, hi + 1.0
+        ax.plot([lo, hi], [lo, hi], color="crimson", linestyle="--", linewidth=1.5, label="Identity ($y=x$)")
+
+        name = feature_names[f_idx]
+        corr_str = f" ($r = {corr:.2f}$)" if not np.isnan(corr) else ""
+        ax.text(0.06, 0.90, f"{name}{corr_str}", transform=ax.transAxes, fontsize=10.5, fontweight="bold")
+        ax.set_xlabel(f"True {name}", fontsize=10)
+        ax.set_ylabel(f"Reconstructed {name}", fontsize=14)
+        ax.tick_params(axis="both", labelsize=8.5)
+        ax.set_xlim(lo, hi)
+        ax.set_ylim(lo, hi)
+
+    for empty in range(n_features, n_rows * n_columns):
+        axes[empty // n_columns][empty % n_columns].axis("off")
+
+    cms_label(axes[0, 0], lumi=lumi, year=year)
+    figure.tight_layout()
+    _save(figure, file_name, formats, show)
+
+
+def plot_feature_importance_ranking(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None, config=None):
+    """Rank features by reconstruction MSE in a horizontal bar chart."""
+    import torch
+
+    set_cms_style()
+    model.eval()
+    errors = []
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            if index >= max_batches:
+                break
+            batch = batch.to(device)
+            if hasattr(model, "encoder") and hasattr(model, "features_decoder"):
+                z = model.encoder(batch.x, batch.edge_index)
+                reconstructed = model.features_decoder(z, batch.edge_index)
+            else:
+                out = model(batch.x, batch.edge_index)
+                reconstructed = out[0] if isinstance(out, tuple) else out
+            errors.append((batch.x - reconstructed).square().detach().cpu().numpy())
+
+    if not errors:
+        return
+
+    errors = np.concatenate(errors)
+    mse_per_feature = np.mean(errors, axis=0)
+    n_features = len(mse_per_feature)
+    names = get_lund_feature_names(n_features, config)
+
+    sorted_indices = np.argsort(mse_per_feature)
+    sorted_mse = mse_per_feature[sorted_indices]
+    sorted_names = [names[i] for i in sorted_indices]
+    total_mse = float(np.sum(mse_per_feature))
+
+    figure, ax = plt.subplots(figsize=(10, max(5.0, 0.45 * n_features)))
+    bars = ax.barh(range(n_features), sorted_mse, color="royalblue", edgecolor="black", alpha=0.85, height=0.65)
+    ax.set_yticks(range(n_features))
+    ax.set_yticklabels(sorted_names, fontsize=8.5)
+    ax.set_ylabel("Features", fontsize=16)
+    ax.set_xlabel("Reconstruction MSE", fontsize=12)
+    ax.tick_params(axis="x", labelsize=10)
+
+    max_val = float(np.max(sorted_mse)) if len(sorted_mse) > 0 else 1.0
+    for bar, val in zip(bars, sorted_mse):
+        pct = (val / total_mse * 100) if total_mse > 0 else 0
+        ax.text(val + max_val * 0.015, bar.get_y() + bar.get_height() / 2, f"{val:.4f} ({pct:.1f}%)", va="center", ha="left", fontsize=9.5)
+
+    ax.set_xlim(0, max_val * 1.3)
+    cms_label(ax, lumi=lumi, year=year)
+    figure.tight_layout()
+    _save(figure, file_name, formats, show)
+
+
+def plot_edge_calibration(model, loader, file_name, device="cpu", max_batches=20, bins=50, formats=("pdf",), show=False, lumi=None, year=None):
+    """Edge prediction probability distribution for true graph edges vs negative sampled non-edges."""
+    import torch
+    import mplhep as hep
+    from torch_geometric.utils import batched_negative_sampling
+
+    encoder = getattr(model, "encoder", None)
+    edges_decoder = getattr(model, "edges_decoder", None)
+    if encoder is None or edges_decoder is None:
+        print("Model lacks encoder or edges_decoder; skipping edge calibration plot")
+        return
+
+    set_cms_style()
+    model.eval()
+    pos_probs, neg_probs = [], []
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            if index >= max_batches:
+                break
+            batch = batch.to(device)
+            z = encoder(batch.x, batch.edge_index)
+            if batch.edge_index.shape[1] > 0:
+                p = edges_decoder(z, batch.edge_index, sigmoid=True)
+                pos_probs.append(p.detach().cpu().numpy())
+            neg_edge_index = batched_negative_sampling(batch.edge_index, batch.batch)
+            if neg_edge_index.shape[1] > 0:
+                np_prob = edges_decoder(z, neg_edge_index, sigmoid=True)
+                neg_probs.append(np_prob.detach().cpu().numpy())
+
+    if not pos_probs or not neg_probs:
+        return
+
+    pos_probs = np.concatenate(pos_probs)
+    neg_probs = np.concatenate(neg_probs)
+
+    figure, ax = plt.subplots(figsize=(10, 7.5))
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    pos_counts, _ = np.histogram(pos_probs, bins=edges, density=True)
+    neg_counts, _ = np.histogram(neg_probs, bins=edges, density=True)
+
+    hep.histplot(pos_counts, edges, ax=ax, label="True Edges ($A_{ij} = 1$)", color="royalblue", histtype="step", linewidth=2.2)
+    hep.histplot(neg_counts, edges, ax=ax, label="Non-Edges ($A_{ij} = 0$, sampled)", color="crimson", histtype="step", linewidth=2.2)
+
+    ax.set_xlabel(r"Predicted Edge Probability $\hat{A}_{ij}$", fontsize=12)
+    ax.set_ylabel("Probability Density", fontsize=16)
+    ax.tick_params(axis="both", labelsize=10)
+    ax.set_xlim(0.0, 1.0)
+    ax.set_yscale("log")
+    ax.legend(fontsize=10.5, loc="upper center")
+    cms_label(ax, lumi=lumi, year=year)
+
+    figure.tight_layout()
+    _save(figure, file_name, formats, show)
+
+
+def plot_loss_vs_jet_kinematics(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None):
+    """Check for mass sculpting: total reconstruction loss vs jet mass and jet pT."""
+    import torch
+
+    set_cms_style()
+    model.eval()
+    losses, jet_masses, jet_pts = [], [], []
+
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            if index >= max_batches:
+                break
+            batch = batch.to(device)
+            tot, _, _ = model.score_batch(batch.x, batch.edge_index, batch.batch)
+            losses.append(tot.detach().cpu().numpy())
+
+            batch_np = batch.batch.detach().cpu().numpy()
+            x_np = batch.x.detach().cpu().numpy()
+            n_graphs = int(batch_np.max()) + 1 if len(batch_np) > 0 else 0
+
+            for g_i in range(n_graphs):
+                node_indices = np.where(batch_np == g_i)[0]
+                if len(node_indices) == 0:
+                    continue
+                root_node = node_indices[-1]
+                if x_np.shape[1] == 12:
+                    jet_pts.append(x_np[root_node, 4])
+                    jet_masses.append(x_np[root_node, 7])
+                elif x_np.shape[1] == 9:
+                    jet_pts.append(0.0)
+                    jet_masses.append(x_np[root_node, 4])
+                else:
+                    jet_pts.append(0.0)
+                    jet_masses.append(0.0)
+
+    if not losses:
+        return
+
+    losses = np.concatenate(losses)
+    jet_masses = np.array(jet_masses)
+    jet_pts = np.array(jet_pts)
+
+    if len(jet_masses) != len(losses):
+        return
+
+    has_pt = np.any(jet_pts > 0)
+    figure, (ax_m, ax_pt) = plt.subplots(1, 2, figsize=(18, 6.5))
+
+    m_mask = np.isfinite(jet_masses) & np.isfinite(losses)
+    ax_m.hexbin(jet_masses[m_mask], losses[m_mask], gridsize=30, cmap="Blues", mincnt=1, bins="log")
+    ax_m.set_xlabel(r"Jet Mass $m_{\mathrm{jet}}$ (normalized / raw)", fontsize=11)
+    ax_m.set_ylabel("Reconstruction Loss", fontsize=15)
+    ax_m.tick_params(axis="both", labelsize=10)
+    ax_m.text(0.06, 0.90, "Reconstruction Loss vs Jet Mass", transform=ax_m.transAxes, fontsize=12, fontweight="bold")
+    cms_label(ax_m, lumi=lumi, year=year)
+
+    if has_pt:
+        pt_mask = np.isfinite(jet_pts) & np.isfinite(losses)
+        ax_pt.hexbin(jet_pts[pt_mask], losses[pt_mask], gridsize=30, cmap="Blues", mincnt=1, bins="log")
+        ax_pt.set_xlabel(r"Jet $p_T$ (normalized / raw)", fontsize=11)
+        ax_pt.set_ylabel("Reconstruction Loss", fontsize=15)
+        ax_pt.tick_params(axis="both", labelsize=10)
+        ax_pt.text(0.06, 0.90, r"Reconstruction Loss vs Jet $p_T$", transform=ax_pt.transAxes, fontsize=12, fontweight="bold")
+    else:
+        ax_pt.text(0.5, 0.5, "pT not stored in graph nodes", ha="center", va="center", transform=ax_pt.transAxes)
+    cms_label(ax_pt, lumi=lumi, year=year)
+
+    figure.tight_layout()
+    _save(figure, file_name, formats, show)
+
+
+def plot_latent_pca_spectrum(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None):
+    """Assess effective dimensionality of latent space via PCA explained variance spectrum."""
+    import torch
+    from sklearn.decomposition import PCA
+
+    encoder = getattr(model, "encoder", None)
+    if encoder is None:
+        return
+
+    set_cms_style()
+    model.eval()
+    latents = []
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            if index >= max_batches:
+                break
+            batch = batch.to(device)
+            z = encoder(batch.x, batch.edge_index)
+            latents.append(z.detach().cpu().numpy())
+
+    if not latents:
+        return
+
+    latents = np.concatenate(latents)
+    n_components = min(latents.shape[1], 20)
+    pca = PCA(n_components=n_components)
+    pca.fit(latents)
+
+    var_ratio = pca.explained_variance_ratio_
+    cum_var = np.cumsum(var_ratio)
+    comp_range = np.arange(1, n_components + 1)
+
+    figure, ax1 = plt.subplots(figsize=(10, 7))
+    ax1.bar(comp_range, var_ratio, color="royalblue", edgecolor="black", alpha=0.8, width=0.6, label="Individual component")
+    ax1.set_xlabel("Principal Component", fontsize=12)
+    ax1.set_ylabel("Explained Variance Ratio", fontsize=16, color="royalblue")
+    ax1.set_xticks(comp_range)
+    ax1.tick_params(axis="both", labelsize=10)
+
+    ax2 = ax1.twinx()
+    ax2.plot(comp_range, cum_var, color="crimson", marker="o", linewidth=2.2, label="Cumulative variance")
+    ax2.set_ylabel("Cumulative Variance Ratio", fontsize=16, color="crimson")
+    ax2.set_ylim(0.0, 1.05)
+    ax2.tick_params(axis="y", labelsize=10)
+    ax2.grid(False)
+
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc="center right", fontsize=10)
+
+    cms_label(ax1, lumi=lumi, year=year)
+    figure.tight_layout()
+    _save(figure, file_name, formats, show)
+
+
+def plot_latent_projection(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None):
+    """2D PCA projection of jet-level latent representations."""
+    import torch
+    from sklearn.decomposition import PCA
+
+    encoder = getattr(model, "encoder", None)
+    if encoder is None:
+        return
+
+    set_cms_style()
+    model.eval()
+    jet_latents, jet_losses = [], []
+    with torch.no_grad():
+        for index, batch in enumerate(loader):
+            if index >= max_batches:
+                break
+            batch = batch.to(device)
+            z = encoder(batch.x, batch.edge_index)
+            batch_np = batch.batch.detach().cpu().numpy()
+            z_np = z.detach().cpu().numpy()
+            tot, _, _ = model.score_batch(batch.x, batch.edge_index, batch.batch)
+            jet_losses.append(tot.detach().cpu().numpy())
+
+            n_graphs = int(batch_np.max()) + 1 if len(batch_np) > 0 else 0
+            for g_i in range(n_graphs):
+                mask = batch_np == g_i
+                if np.any(mask):
+                    jet_latents.append(np.mean(z_np[mask], axis=0))
+
+    if not jet_latents:
+        return
+
+    jet_latents = np.array(jet_latents)
+    jet_losses = np.concatenate(jet_losses)
+
+    pca = PCA(n_components=2)
+    coords = pca.fit_transform(jet_latents)
+
+    figure, ax = plt.subplots(figsize=(10, 8))
+    sc = ax.scatter(coords[:, 0], coords[:, 1], c=jet_losses, cmap="viridis", alpha=0.75, s=20, edgecolors="none")
+    cbar = figure.colorbar(sc, ax=ax, pad=0.03)
+    cbar.set_label("Reconstruction Loss", fontsize=16)
+    cbar.ax.tick_params(labelsize=10)
+
+    var1 = pca.explained_variance_ratio_[0] * 100
+    var2 = pca.explained_variance_ratio_[1] * 100
+    ax.set_xlabel(f"PC 1 ({var1:.1f}% var)", fontsize=12)
+    ax.set_ylabel(f"PC 2 ({var2:.1f}% var)", fontsize=16)
+    ax.tick_params(axis="both", labelsize=10)
+    cms_label(ax, lumi=lumi, year=year)
+
+    figure.tight_layout()
+    _save(figure, file_name, formats, show)
+
+
+def plot_xai_feature_saliency(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None, config=None):
+    """Global feature attribution ranking via gradient saliency / Integrated Gradients."""
+    from utils.XaiUtils import compute_node_feature_saliency
+
+    set_cms_style()
+    saliency = compute_node_feature_saliency(model, loader, device=device, max_batches=max_batches)
+    if len(saliency) == 0:
+        return
+
+    n_features = len(saliency)
+    names = get_lund_feature_names(n_features, config)
+
+    sorted_indices = np.argsort(saliency)
+    sorted_sal = saliency[sorted_indices]
+    sorted_names = [names[i] for i in sorted_indices]
+    total_sal = float(np.sum(saliency))
+
+    figure, ax = plt.subplots(figsize=(10, max(5.0, 0.45 * n_features)))
+    bars = ax.barh(range(n_features), sorted_sal, color="darkorange", edgecolor="black", alpha=0.85, height=0.65)
+    ax.set_yticks(range(n_features))
+    ax.set_yticklabels(sorted_names, fontsize=8.5)
+    ax.set_ylabel("Features", fontsize=16)
+    ax.set_xlabel(r"Integrated Gradients Attribution ($|x \cdot \nabla_x \mathcal{L}|$)")
+    ax.tick_params(axis="x", labelsize=10)
+
+    max_val = float(np.max(sorted_sal)) if len(sorted_sal) > 0 else 1.0
+    for bar, val in zip(bars, sorted_sal):
+        pct = (val / total_sal * 100) if total_sal > 0 else 0
+        ax.text(val + max_val * 0.015, bar.get_y() + bar.get_height() / 2, f"{val:.4f} ({pct:.1f}%)", va="center", ha="left", fontsize=9.5)
+
+    ax.set_xlim(0, max_val * 1.3)
+    cms_label(ax, lumi=lumi, year=year)
+    figure.tight_layout()
+    _save(figure, file_name, formats, show)
+
+
+def plot_tree_with_scores(graph, node_scores, file_name, label="Reconstruction error", formats=("pdf",), root=None, show=False, lumi=None, year=None):
+    """Draw a single Lund tree graph with nodes colored by error or attribution score."""
+    if root is None:
+        root = max(graph.edge_index[0]).item() if graph.edge_index.numel() > 0 else 0
+
+    g = to_networkx(graph, to_undirected=True)
+    pos = hierarchy_pos(g, leaf_vs_root_factor=0.5, root=root)
+
+    set_cms_style()
+    figure, ax = plt.subplots(figsize=(16, 10))
+    nx.draw_networkx_edges(g, pos, ax=ax, alpha=0.35, edge_color="gray", width=1.5)
+    nodes = nx.draw_networkx_nodes(g, pos, nodelist=g.nodes(), node_color=node_scores, cmap="magma", node_size=320, ax=ax)
+
+    cb = figure.colorbar(nodes, ax=ax, pad=0.02, shrink=0.85)
+    cb.set_label(label, size=17)
+    cb.ax.tick_params(labelsize=10)
+    ax.axis("off")
+    cms_label(ax, lumi=lumi, year=year)
+
+    figure.tight_layout()
     _save(figure, file_name, formats, show)

@@ -25,15 +25,24 @@ from utils.GaeConfig import load_config
 from utils.InputJson import score_output_basename
 from utils.PlotUtils import (
     plot_auc_2d,
+    plot_edge_calibration,
+    plot_feature_correlations,
+    plot_feature_importance_ranking,
     plot_feature_residuals,
     plot_latent_distributions,
+    plot_latent_pca_spectrum,
+    plot_latent_projection,
     plot_loss_curves,
     plot_loss_efficiency,
+    plot_loss_vs_jet_kinematics,
     plot_roc,
     plot_score_distributions,
     plot_sic_vs_fpr,
+    plot_tree_with_scores,
+    plot_xai_feature_saliency,
     write_th1s,
 )
+
 
 
 def parse_arguments():
@@ -263,57 +272,84 @@ def load_samples(config, scores_dir, sample_names=None):
     return overlays, pool_discovered(overlays, roles)
 
 
-def residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device="cpu", bins=50, max_batches=20):
-    """Residual and latent plots, which need the model and a graph dataset."""
+def residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device="cpu", bins=50, max_batches=20, year=None, lumi=None):
+    """Run full diagnostic, latent representation, and XAI suite using model and graph dataset."""
     import torch
-
     from architectures.ModelRegistry import build_model
     from data_loading.graphDataLoader import GraphDataLoader
     from utils.LundTreeUtilities import OnTheFlyNormalizer
+    from utils.XaiUtils import compute_tree_node_attributions
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     print(f"Model: {checkpoint['model_spec']}")
     print(f"Model checkpoint path: {checkpoint_path}")
-    model = build_model(
-        checkpoint["model_spec"],
-        checkpoint["num_features"],
-        **checkpoint["model_kwargs"],
-    )
+    print(f"Diagnostic dataset sample: {residual_sample}")
+    model = build_model(checkpoint["model_spec"], checkpoint["num_features"], **checkpoint["model_kwargs"])
     model.load_state_dict(checkpoint["state_dict"])
     model = model.to(device)
 
     sample = config.sample(residual_sample)
-    normalizer = OnTheFlyNormalizer(
-        ["x"], checkpoint["means"], checkpoint["stds"]
-    )
+    normalizer = OnTheFlyNormalizer(["x"], checkpoint["means"], checkpoint["stds"])
     settings = checkpoint.get("training", {})
+    dataset_paths = [config.dataset_paths(sample)]
+
+    split_state = checkpoint.get("split_state")
+    if split_state is not None:
+        state_datasets = split_state.get("datasets", {})
+        for path, name in dataset_paths:
+            resolved_key = f"{os.path.realpath(path)}::{name}"
+            raw_key = f"{os.path.abspath(path)}::{name}"
+            if resolved_key not in state_datasets and raw_key not in state_datasets:
+                split_state = None
+                break
+
     loader = GraphDataLoader(
-        dataset_paths=[config.dataset_paths(sample)],
+        dataset_paths=dataset_paths,
         split_windows=[list(settings.get("test_window", [0.85, 1.0]))],
-        split_state=checkpoint.get("split_state"),
+        split_state=split_state,
+        split_seed=None if split_state is not None else settings.get("split_seed", 12345),
         sampling="sequential",
         normalizer=normalizer,
         batch_size=settings.get("batch_size", 64),
     )
 
-    plot_feature_residuals(
-        model,
-        loader,
-        os.path.join(outdir, "feature_residuals"),
-        device=device,
-        max_batches=max_batches,
-        bins=bins,
-        formats=formats,
-    )
-    plot_latent_distributions(
-        model,
-        loader,
-        os.path.join(outdir, "latent_distributions"),
-        device=device,
-        max_batches=max_batches,
-        bins=bins,
-        formats=formats,
-    )
+    batches = []
+    for idx, batch in enumerate(loader):
+        if idx >= max_batches:
+            break
+        batches.append(batch)
+
+    if not batches:
+        print("No batches loaded for diagnostic plots; skipping")
+        return
+
+    plot_feature_residuals(model, batches, os.path.join(outdir, "feature_residuals"), device=device, max_batches=max_batches, bins=bins, formats=formats, lumi=lumi, year=year, config=config)
+    print("Wrote feature_residuals")
+    plot_latent_distributions(model, batches, os.path.join(outdir, "latent_distributions"), device=device, max_batches=max_batches, bins=bins, formats=formats, lumi=lumi, year=year)
+    print("Wrote latent_distributions")
+    plot_feature_correlations(model, batches, os.path.join(outdir, "feature_correlations"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, config=config)
+    print("Wrote feature_correlations")
+    plot_feature_importance_ranking(model, batches, os.path.join(outdir, "feature_importance_ranking"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, config=config)
+    print("Wrote feature_importance_ranking")
+    plot_edge_calibration(model, batches, os.path.join(outdir, "edge_calibration"), device=device, max_batches=max_batches, bins=bins, formats=formats, lumi=lumi, year=year)
+    print("Wrote edge_calibration")
+    plot_loss_vs_jet_kinematics(model, batches, os.path.join(outdir, "loss_vs_jet_kinematics"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year)
+    print("Wrote loss_vs_jet_kinematics")
+    plot_latent_pca_spectrum(model, batches, os.path.join(outdir, "latent_pca_spectrum"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year)
+    print("Wrote latent_pca_spectrum")
+    plot_latent_projection(model, batches, os.path.join(outdir, "latent_projection_2d"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year)
+    print("Wrote latent_projection_2d")
+    plot_xai_feature_saliency(model, batches, os.path.join(outdir, "xai_feature_saliency"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, config=config)
+    print("Wrote xai_feature_saliency")
+
+    try:
+        single_graph = batches[0].get_example(0) if hasattr(batches[0], "get_example") else batches[0]
+        node_mse, node_saliency, _ = compute_tree_node_attributions(model, single_graph, device=device)
+        plot_tree_with_scores(single_graph, node_mse, os.path.join(outdir, "lund_tree_loss_annotated"), label="Node Feature MSE", formats=formats, lumi=lumi, year=year)
+        plot_tree_with_scores(single_graph, node_saliency, os.path.join(outdir, "lund_tree_xai_annotated"), label=r"Node Attribution ($|x \cdot \nabla_x \mathcal{L}|$)", formats=formats, lumi=lumi, year=year)
+        print("Wrote lund_tree_loss_annotated and lund_tree_xai_annotated")
+    except Exception as exc:
+        print(f"Skipping annotated Lund tree plots: {exc}")
 
 
 def plot_single_target(config, scores_dir, outdir, formats, bins=50, history_path=None, checkpoint_path=None, residual_sample=None, sample_names=None, device="cpu", max_batches=20, year=None, lumi=None):
@@ -330,7 +366,7 @@ def plot_single_target(config, scores_dir, outdir, formats, bins=50, history_pat
     else:
         histograms = plot_score_distributions(overlays, os.path.join(outdir, "score_distributions"), bins=bins * 2, density=True, formats=formats, year=year, lumi=lumi)
         plot_loss_efficiency(overlays, os.path.join(outdir, "loss_efficiency"), formats=formats, year=year, lumi=lumi)
-        print("Wrote score_distributions and loss_efficiency")
+        print(f"Wrote score_distributions and loss_efficiency with location - {outdir}")
         write_th1s(os.path.join(outdir, "histograms.root"), histograms)
         print("Wrote histograms.root")
 
@@ -362,8 +398,10 @@ def plot_single_target(config, scores_dir, outdir, formats, bins=50, history_pat
             print("Need both a signal and a background sample with scores for the ROC and SIC plots; skipping them")
 
     if checkpoint_path is not None and residual_sample is not None and os.path.isfile(checkpoint_path):
-        residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device=device, bins=bins, max_batches=max_batches)
-        print("Wrote feature_residuals and latent_distributions")
+        try:
+            residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device=device, bins=bins, max_batches=max_batches, year=year, lumi=lumi)
+        except Exception as exc:
+            print(f"Error producing diagnostic and residual plots for sample {residual_sample}: {exc}")
 
     print(f"Plots are in {outdir}")
 
@@ -400,19 +438,62 @@ def main():
         history_path = args.history
         if history_path is None and args.run_name:
             run_tag = f"{args.run_name}_{seed_tag}" if seed is not None else args.run_name
-            eos_cand = os.path.join(args.eos_dir, base_train_cfg, run_tag, "history.json") if args.eos_dir else None
-            local_cand = os.path.join(base_train_cfg, run_tag, "history.json")
-            if eos_cand and os.path.isfile(eos_cand):
-                history_path = eos_cand
-            elif os.path.isfile(local_cand):
-                history_path = local_cand
+            cands = []
+            if args.eos_dir:
+                cands.extend([os.path.join(args.eos_dir, base_train_cfg, run_tag, "history.json"), os.path.join(args.eos_dir, "training_aimar", run_tag, "history.json"), os.path.join(args.eos_dir, run_tag, "history.json")])
+            cands.extend([os.path.join(base_train_cfg, run_tag, "history.json"), os.path.join("training_aimar", run_tag, "history.json")])
+            for cand in cands:
+                if os.path.isfile(cand):
+                    history_path = cand
+                    break
 
         checkpoint_path = args.checkpoint
-        if checkpoint_path is None and args.run_name and args.residual_sample:
+        if checkpoint_path is None and args.run_name:
             try:
                 checkpoint_path = config.find_checkpoint(run_name=args.run_name, seed=seed, base_dir=args.eos_dir)
             except Exception:
-                checkpoint_path = None
+                run_tag = f"{args.run_name}_{seed_tag}" if seed is not None else args.run_name
+                ckpt_cands = []
+                for train_sub in [base_train_cfg, "training_aimar", ""]:
+                    for fname in ["checkpoint_best.pt", "checkpoint.pt", "checkpoint_latest.pt"]:
+                        if args.eos_dir:
+                            ckpt_cands.append(os.path.join(args.eos_dir, train_sub, run_tag, fname))
+                        ckpt_cands.append(os.path.join(train_sub, run_tag, fname))
+                for cand in ckpt_cands:
+                    if os.path.isfile(cand):
+                        checkpoint_path = cand
+                        break
+
+        residual_sample = args.residual_sample
+        if residual_sample is None and checkpoint_path is not None and os.path.isfile(checkpoint_path):
+            import torch
+            def _sample_exists(s_name):
+                if s_name not in config.samples:
+                    return False
+                try:
+                    config.dataset_root(config.sample(s_name), base_dir=args.eos_dir, require_exists=True)
+                    return True
+                except Exception:
+                    return False
+
+            try:
+                ckpt_meta = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+                for ts in ckpt_meta.get("train_samples", []):
+                    if _sample_exists(ts):
+                        residual_sample = ts
+                        break
+            except Exception:
+                pass
+            if residual_sample is None:
+                for bg in config.samples_with_role("background"):
+                    if _sample_exists(bg.name):
+                        residual_sample = bg.name
+                        break
+            if residual_sample is None:
+                for s_name in config.samples:
+                    if _sample_exists(s_name):
+                        residual_sample = s_name
+                        break
 
         print(f"\n--- Plotting for {'seed ' + str(seed) if seed is not None else 'default'} (scores: {scores_dir}) ---")
         plot_single_target(
@@ -423,7 +504,7 @@ def main():
             bins=args.bins,
             history_path=history_path,
             checkpoint_path=checkpoint_path,
-            residual_sample=args.residual_sample,
+            residual_sample=residual_sample,
             sample_names=args.samples,
             device=args.device,
             max_batches=args.max_batches,
@@ -434,3 +515,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
