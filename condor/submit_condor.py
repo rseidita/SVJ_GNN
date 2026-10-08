@@ -96,10 +96,8 @@ def parse_arguments():
     parser.add_argument("--config", default="gae_config.json")
     parser.add_argument("--samples", nargs="+", default=None)
     parser.add_argument("--files-per-job", type=int, default=5)
-    default_user = os.environ.get("USER", "nparmar")
-    default_log_dir = f"/tmp/{default_user}/logs"
     parser.add_argument("--submit-dir", default=os.path.join(CONDOR_DIR, "submit"))
-    parser.add_argument("--log-dir", default=default_log_dir, help=f"Directory for job stdout/stderr/log (default: {default_log_dir})")
+    parser.add_argument("--log-dir", default=os.path.join(CONDOR_DIR, "logs"), help="Directory for job stdout/stderr/log (default: condor/logs)")
     parser.add_argument("--request-cpus", type=int, default=1)
     parser.add_argument("--request-memory", default="8 GB")
     parser.add_argument("--request-disk", default="4 GB")
@@ -391,6 +389,8 @@ def main():
     config = load_config(os.path.join(SVJ_GNN_DIR, args.config))
 
     proxy_path = resolve_and_prepare_proxy(args.proxy)
+    if args.log_dir.startswith("/tmp"):
+        print(f"WARNING: --log-dir '{args.log_dir}' is in local /tmp. On CERN lxplus, HTCondor access points and worker nodes cannot access local /tmp across machines. Output and log files will fail to transfer. Use an AFS path instead.")
 
     os.makedirs(args.submit_dir, exist_ok=True)
     os.makedirs(args.log_dir, exist_ok=True)
@@ -460,9 +460,12 @@ def main():
         os.path.join(args.log_dir, item.split(", ", 4)[3])
         for item in queued_jobs
     })
-    print("Condor stdout, stderr, and event log files will be written under:")
-    for log_dir in log_dirs:
-        print(f"  {log_dir}/$(SAMPLE)_$(SHARD).stdout, .stderr, .log")
+    print("\nLog file locations:")
+    for d in log_dirs:
+        print(f"  Directory: {d}")
+        print(f"    - stdout: {d}/<sample>_<shard>.stdout")
+        print(f"    - stderr: {d}/<sample>_<shard>.stderr")
+        print(f"    - log:    {d}/<sample>_<shard>.log")
 
 
 if __name__ == "__main__":
