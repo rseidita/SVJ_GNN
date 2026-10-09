@@ -24,6 +24,7 @@ import uproot
 from utils.GaeConfig import load_config
 from utils.InputJson import score_output_basename
 from utils.PlotUtils import (
+    format_signal_label,
     plot_auc_2d,
     plot_edge_calibration,
     plot_feature_correlations,
@@ -35,6 +36,7 @@ from utils.PlotUtils import (
     plot_loss_curves,
     plot_loss_efficiency,
     plot_loss_vs_jet_kinematics,
+    plot_paired_trees,
     plot_roc,
     plot_score_distributions,
     plot_sic_vs_fpr,
@@ -83,6 +85,13 @@ def parse_arguments():
         "--residual-sample",
         default=None,
         help="Sample with produced graphs used for residual and latent plots",
+    )
+    parser.add_argument(
+        "--compare-signal",
+        nargs="?",
+        const="baseline",
+        default=None,
+        help="Signal sample to compare in diagnostics (defaults to baseline m_{Z'}=1000, rinv=0.3)",
     )
     parser.add_argument("--run-name", default=None, help="Training run name to plot scores and history for")
     parser.add_argument("--seed", type=int, default=None, help="Training random seed to plot")
@@ -272,7 +281,118 @@ def load_samples(config, scores_dir, sample_names=None):
     return overlays, pool_discovered(overlays, roles)
 
 
-def residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device="cpu", bins=50, max_batches=20, year=None, lumi=None):
+def load_or_stream_signal_batches(config, signal_spec, checkpoint, max_batches=5, device="cpu"):
+    """Load preprocessed graph dataset or stream graphs on the fly from ROOT file."""
+    import torch
+    from torch_geometric.data import Batch
+    from data_loading.graphDataLoader import GraphDataLoader
+    from utils.LundTreeUtilities import OnTheFlyNormalizer
+    from utils.GraphBuilder import GraphBuildConfig, build_pfnano_jet_graph, pfnano_branches
+    from utils.InputJson import flat_files
+    import uproot
+
+    target_sample = None
+    if signal_spec and signal_spec in config.samples:
+        target_sample = config.sample(signal_spec)
+    elif signal_spec:
+        mmed_target = "1000" if (signal_spec == "baseline" or "1000" in signal_spec) else None
+        rinv_target = "0.3" if (signal_spec == "baseline" or "0.3" in signal_spec) else None
+        for s in config.samples_with_role("signal"):
+            if mmed_target and mmed_target in s.name and rinv_target and rinv_target in s.name:
+                target_sample = s
+                break
+        if target_sample is None and len(config.samples_with_role("signal")) > 0:
+            target_sample = config.samples_with_role("signal")[0]
+
+    if target_sample is None:
+        print(f"No signal sample found matching '{signal_spec}'; skipping signal comparison")
+        return None, None
+
+    normalizer = OnTheFlyNormalizer(["x"], checkpoint["means"], checkpoint["stds"])
+    sig_label = format_signal_label(target_sample.name) if target_sample else "Signal"
+
+    try:
+        sig_droot = config.dataset_root(target_sample, require_exists=True)
+        sig_dataset_paths = [config.dataset_paths(target_sample)]
+        sig_loader = GraphDataLoader(
+            dataset_paths=sig_dataset_paths,
+            split_windows=[[0.0, 1.0]],
+            sampling="sequential",
+            normalizer=normalizer,
+            batch_size=checkpoint.get("training", {}).get("batch_size", 64),
+        )
+        sig_batches = []
+        for idx, b in enumerate(sig_loader):
+            if idx >= max_batches:
+                break
+            sig_batches.append(b)
+        if sig_batches:
+            print(f"Loaded {len(sig_batches)} signal batches from dataset {target_sample.name}")
+            return sig_batches, sig_label
+    except Exception:
+        pass
+
+    try:
+        groups = target_sample.groups()
+        all_files = flat_files(groups)
+        if not all_files:
+            print(f"No ROOT files found for signal {target_sample.name}")
+            return None, None
+
+        graph_cfg_dict = dict(config.graph)
+        num_features = checkpoint.get("num_features", 12)
+        save_4v = (num_features == 12)
+        graph_build_cfg = GraphBuildConfig(
+            jet_collection=graph_cfg_dict.get("jet_collection", "FatJet"),
+            use_lund_decomp=graph_cfg_dict.get("use_lund_decomp", True),
+            n_lund_vars=graph_cfg_dict.get("n_lund_vars", 5),
+            save_energy_fractions=graph_cfg_dict.get("save_energy_fractions", True),
+            save_4vectors_in_lund_tree=save_4v,
+            use_displacement=graph_cfg_dict.get("use_displacement", False),
+            kt_cut=graph_cfg_dict.get("kt_cut", None),
+        )
+
+        first_root_path = all_files[0]
+        print(f"Streaming signal graphs on the fly from {first_root_path}...")
+        branches = pfnano_branches(graph_build_cfg)
+        with uproot.open(first_root_path) as rf:
+            events = rf["Events"].arrays(branches, entry_stop=max_batches * 25, library="ak")
+
+        graphs = []
+        means = (checkpoint["means"] if isinstance(checkpoint["means"], torch.Tensor) else checkpoint["means"]["x"]).cpu()
+        stds = (checkpoint["stds"] if isinstance(checkpoint["stds"], torch.Tensor) else checkpoint["stds"]["x"]).cpu()
+        for ev in events:
+            n_jets = int(ev[f"n{graph_build_cfg.jet_collection}"])
+            for j in range(n_jets):
+                g, _ = build_pfnano_jet_graph(ev, j, graph_build_cfg)
+                if g is not None:
+                    g.x = (g.x - means) / stds
+                    graphs.append(g)
+                if len(graphs) >= max_batches * 64:
+                    break
+            if len(graphs) >= max_batches * 64:
+                break
+
+        if not graphs:
+            print("No signal graphs could be constructed")
+            return None, None
+
+        sig_batches = []
+        bsize = 64
+        for i in range(0, len(graphs), bsize):
+            chunk = graphs[i : i + bsize]
+            sig_batches.append(Batch.from_data_list(chunk))
+            if len(sig_batches) >= max_batches:
+                break
+
+        print(f"Built {len(graphs)} signal graphs ({len(sig_batches)} batches) on the fly for {sig_label}")
+        return sig_batches, sig_label
+    except Exception as exc:
+        print(f"Could not stream signal graphs: {exc}")
+        return None, None
+
+
+def residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device="cpu", bins=50, max_batches=20, year=None, lumi=None, compare_signal=None):
     """Run full diagnostic, latent representation, and XAI suite using model and graph dataset."""
     import torch
     from architectures.ModelRegistry import build_model
@@ -323,36 +443,46 @@ def residual_plots(checkpoint_path, residual_sample, config, formats, outdir, de
         print("No batches loaded for diagnostic plots; skipping")
         return
 
-    plot_feature_residuals(model, batches, os.path.join(outdir, "feature_residuals"), device=device, max_batches=max_batches, bins=bins, formats=formats, lumi=lumi, year=year, config=config)
+    sig_batches, sig_label = None, None
+    if compare_signal:
+        sig_batches, sig_label = load_or_stream_signal_batches(config, compare_signal, checkpoint, max_batches=max_batches, device=device)
+
+    plot_feature_residuals(model, batches, os.path.join(outdir, "feature_residuals"), device=device, max_batches=max_batches, bins=bins, formats=formats, lumi=lumi, year=year, config=config, signal_loader=sig_batches, signal_label=sig_label if sig_label else "Signal")
     print("Wrote feature_residuals")
     plot_latent_distributions(model, batches, os.path.join(outdir, "latent_distributions"), device=device, max_batches=max_batches, bins=bins, formats=formats, lumi=lumi, year=year)
     print("Wrote latent_distributions")
     plot_feature_correlations(model, batches, os.path.join(outdir, "feature_correlations"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, config=config)
     print("Wrote feature_correlations")
-    plot_feature_importance_ranking(model, batches, os.path.join(outdir, "feature_importance_ranking"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, config=config)
+    plot_feature_importance_ranking(model, batches, os.path.join(outdir, "feature_importance_ranking"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, config=config, signal_loader=sig_batches, signal_label=sig_label if sig_label else "Signal")
     print("Wrote feature_importance_ranking")
-    plot_edge_calibration(model, batches, os.path.join(outdir, "edge_calibration"), device=device, max_batches=max_batches, bins=bins, formats=formats, lumi=lumi, year=year)
+    plot_edge_calibration(model, batches, os.path.join(outdir, "edge_calibration"), device=device, max_batches=max_batches, bins=bins, formats=formats, lumi=lumi, year=year, signal_loader=sig_batches, signal_label=sig_label if sig_label else "Signal")
     print("Wrote edge_calibration")
     plot_loss_vs_jet_kinematics(model, batches, os.path.join(outdir, "loss_vs_jet_kinematics"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year)
     print("Wrote loss_vs_jet_kinematics")
     plot_latent_pca_spectrum(model, batches, os.path.join(outdir, "latent_pca_spectrum"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year)
     print("Wrote latent_pca_spectrum")
-    plot_latent_projection(model, batches, os.path.join(outdir, "latent_projection_2d"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year)
+    plot_latent_projection(model, batches, os.path.join(outdir, "latent_projection_2d"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, signal_loader=sig_batches, signal_label=sig_label if sig_label else "Signal")
     print("Wrote latent_projection_2d")
-    plot_xai_feature_saliency(model, batches, os.path.join(outdir, "xai_feature_saliency"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, config=config)
+    plot_xai_feature_saliency(model, batches, os.path.join(outdir, "xai_feature_saliency"), device=device, max_batches=max_batches, formats=formats, lumi=lumi, year=year, config=config, signal_loader=sig_batches, signal_label=sig_label if sig_label else "Signal")
     print("Wrote xai_feature_saliency")
 
     try:
         single_graph = batches[0].get_example(0) if hasattr(batches[0], "get_example") else batches[0]
         node_mse, node_saliency, _ = compute_tree_node_attributions(model, single_graph, device=device)
-        plot_tree_with_scores(single_graph, node_mse, os.path.join(outdir, "lund_tree_loss_annotated"), label="Node Feature MSE", formats=formats, lumi=lumi, year=year)
-        plot_tree_with_scores(single_graph, node_saliency, os.path.join(outdir, "lund_tree_xai_annotated"), label=r"Node Attribution ($|x \cdot \nabla_x \mathcal{L}|$)", formats=formats, lumi=lumi, year=year)
+        if sig_batches:
+            single_sig = sig_batches[0].get_example(0) if hasattr(sig_batches[0], "get_example") else sig_batches[0]
+            sig_node_mse, sig_node_sal, _ = compute_tree_node_attributions(model, single_sig, device=device)
+            plot_paired_trees(single_graph, node_mse, single_sig, sig_node_mse, os.path.join(outdir, "lund_tree_loss_annotated"), label="Node Feature MSE", sig_label=sig_label if sig_label else "Signal", formats=formats, lumi=lumi, year=year)
+            plot_paired_trees(single_graph, node_saliency, single_sig, sig_node_sal, os.path.join(outdir, "lund_tree_xai_annotated"), label=r"Node Attribution ($|x \cdot \nabla_x \mathcal{L}|$)", sig_label=sig_label if sig_label else "Signal", formats=formats, lumi=lumi, year=year)
+        else:
+            plot_tree_with_scores(single_graph, node_mse, os.path.join(outdir, "lund_tree_loss_annotated"), label="Node Feature MSE", formats=formats, lumi=lumi, year=year)
+            plot_tree_with_scores(single_graph, node_saliency, os.path.join(outdir, "lund_tree_xai_annotated"), label=r"Node Attribution ($|x \cdot \nabla_x \mathcal{L}|$)", formats=formats, lumi=lumi, year=year)
         print("Wrote lund_tree_loss_annotated and lund_tree_xai_annotated")
     except Exception as exc:
         print(f"Skipping annotated Lund tree plots: {exc}")
 
 
-def plot_single_target(config, scores_dir, outdir, formats, bins=50, history_path=None, checkpoint_path=None, residual_sample=None, sample_names=None, device="cpu", max_batches=20, year=None, lumi=None):
+def plot_single_target(config, scores_dir, outdir, formats, bins=50, history_path=None, checkpoint_path=None, residual_sample=None, sample_names=None, device="cpu", max_batches=20, year=None, lumi=None, compare_signal=None):
     os.makedirs(outdir, exist_ok=True)
     if history_path is not None and os.path.isfile(history_path):
         with open(history_path) as history_file:
@@ -399,7 +529,7 @@ def plot_single_target(config, scores_dir, outdir, formats, bins=50, history_pat
 
     if checkpoint_path is not None and residual_sample is not None and os.path.isfile(checkpoint_path):
         try:
-            residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device=device, bins=bins, max_batches=max_batches, year=year, lumi=lumi)
+            residual_plots(checkpoint_path, residual_sample, config, formats, outdir, device=device, bins=bins, max_batches=max_batches, year=year, lumi=lumi, compare_signal=compare_signal)
         except Exception as exc:
             print(f"Error producing diagnostic and residual plots for sample {residual_sample}: {exc}")
 
@@ -510,6 +640,7 @@ def main():
             max_batches=args.max_batches,
             year=args.year,
             lumi=args.lumi,
+            compare_signal=args.compare_signal,
         )
 
 

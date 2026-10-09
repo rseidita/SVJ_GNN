@@ -255,7 +255,7 @@ def plot_loss_curves(history, file_name, formats=("pdf",), show=False, lumi=None
                     ax.plot([epochs[-1]], [test_scalar], marker="^", markersize=7, color="forestgreen")
 
         ax.text(0.06, 0.90, title, transform=ax.transAxes, fontsize=12, fontweight="bold")
-        ax.set_xlabel("Epoch", fontsize=12)
+        ax.set_xlabel("Epoch", fontsize=16)
         ax.set_ylabel(ylabel, fontsize=16)
         ax.tick_params(axis="both", labelsize=10)
         all_vals = [v for v in train_vals + val_vals if not np.isnan(v)]
@@ -377,7 +377,7 @@ def plot_score_distributions(samples, file_name, bins=100, density=True, formats
                 other_handles.append(Line2D([0], [0], color=color if color is not None else "black", linestyle="-", linewidth=2, label=clean_label))
 
     axes.set_xlim(0.0, 0.2)
-    axes.set_xlabel("Reconstruction loss")
+    axes.set_xlabel("Reconstruction loss", fontsize=16)
     axes.set_ylabel("Normalized events" if density else "Events")
 
     if is_grid and len(signal_labels) > 3:
@@ -413,7 +413,7 @@ def plot_loss_efficiency(samples, file_name, formats=("pdf",), show=False, lumi=
                 other_handles.append(Line2D([0], [0], color=color if color is not None else "black", linestyle="-", linewidth=2, label=clean_label))
 
     axes.set_xlim(0.0, 1.0)
-    axes.set_xlabel("Reconstruction loss threshold")
+    axes.set_xlabel("Reconstruction loss threshold", fontsize=16)
     axes.set_ylabel("Normalized number of events")
     axes.set_yscale("log")
 
@@ -465,7 +465,7 @@ def plot_roc(scores_signal, scores_background, file_name, weights_signal=None, w
     axes.plot([0, 1], [0, 1], linestyle="--", color="grey", linewidth=1)
     axes.set_xlim(0.0, 1.0)
     axes.set_ylim(0.0, 1.0)
-    axes.set_xlabel("False positive rate")
+    axes.set_xlabel("False positive rate", fontsize=16)
     axes.set_ylabel("Signal efficiency")
 
     if is_grid and len(signal_labels) > 3:
@@ -504,7 +504,7 @@ def plot_sic_vs_fpr(scores_signal, scores_background, file_name, weights_signal=
 
     axes.axhline(1.0, linestyle="--", color="grey", linewidth=1)
     axes.set_xscale("log")
-    axes.set_xlabel("Background efficiency")
+    axes.set_xlabel("Background efficiency", fontsize=16)
     axes.set_ylabel(r"$\varepsilon_S/\sqrt{\varepsilon_B}$")
 
     if is_grid and len(signal_labels) > 3:
@@ -549,7 +549,7 @@ def plot_auc_2d(aucs, file_name, formats=("pdf",), show=False, lumi=None, year=N
     axes.set_xticklabels([str(m) for m in unique_mmed], rotation=45 if len(unique_mmed) > 8 else 0)
     axes.set_yticks(range(len(unique_rinv)))
     axes.set_yticklabels([f"{r:.1f}" for r in unique_rinv])
-    axes.set_xlabel(r"$m_{Z'}$ [GeV]")
+    axes.set_xlabel(r"$m_{Z'}$ [GeV]", fontsize=16)
     axes.set_ylabel(r"$r_{\mathrm{inv}}$")
 
     v_min, v_max = im.get_clim()
@@ -608,7 +608,7 @@ def get_lund_feature_names(n_features, config=None):
     return [f"Feature {i}" for i in range(n_features)]
 
 
-def plot_feature_residuals(model, loader, file_name, device="cpu", max_batches=20, bins=50, formats=("pdf",), show=False, lumi=None, year=None, config=None):
+def plot_feature_residuals(model, loader, file_name, device="cpu", max_batches=20, bins=50, formats=("pdf",), show=False, lumi=None, year=None, config=None, signal_loader=None, signal_label="Signal"):
     """Input minus reconstructed node feature, one panel per feature."""
     import torch
     import mplhep as hep
@@ -619,26 +619,30 @@ def plot_feature_residuals(model, loader, file_name, device="cpu", max_batches=2
 
     set_cms_style()
     model.eval()
-    residuals = []
-    with torch.no_grad():
-        for index, batch in enumerate(loader):
-            if index >= max_batches:
-                break
-            batch = batch.to(device)
-            if hasattr(model, "encoder") and hasattr(model, "features_decoder"):
-                z = model.encoder(batch.x, batch.edge_index)
-                reconstructed = model.features_decoder(z, batch.edge_index)
-            else:
-                reconstructed = model(batch.x, batch.edge_index)
-                if isinstance(reconstructed, tuple):
-                    reconstructed = reconstructed[0]
-            residuals.append((batch.x - reconstructed).detach().cpu().numpy())
 
-    if not residuals:
+    def _extract_residuals(b_loader):
+        res = []
+        with torch.no_grad():
+            for index, batch in enumerate(b_loader):
+                if index >= max_batches:
+                    break
+                batch = batch.to(device)
+                if hasattr(model, "encoder") and hasattr(model, "features_decoder"):
+                    z = model.encoder(batch.x, batch.edge_index)
+                    reconstructed = model.features_decoder(z, batch.edge_index)
+                else:
+                    reconstructed = model(batch.x, batch.edge_index)
+                    if isinstance(reconstructed, tuple):
+                        reconstructed = reconstructed[0]
+                res.append((batch.x - reconstructed).detach().cpu().numpy())
+        return np.concatenate(res) if res else None
+
+    residuals = _extract_residuals(loader)
+    if residuals is None:
         print("No batches available; skipping residual plot")
         return
 
-    residuals = np.concatenate(residuals)
+    sig_residuals = _extract_residuals(signal_loader) if signal_loader is not None else None
     n_features = residuals.shape[1]
     feature_names = get_lund_feature_names(n_features, config)
     n_columns = min(3, n_features)
@@ -647,11 +651,28 @@ def plot_feature_residuals(model, loader, file_name, device="cpu", max_batches=2
 
     for feature in range(n_features):
         axis = axes[feature // n_columns][feature % n_columns]
-        counts, edges = np.histogram(residuals[:, feature], bins=bins)
-        hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2, color="royalblue")
-        axis.set_xlabel(f"Residual: {feature_names[feature]}")
-        axis.set_ylabel("Nodes", fontsize=16)
-        axis.tick_params(axis="y", labelsize=10)
+        bkg_vals = residuals[:, feature]
+        if sig_residuals is not None:
+            sig_vals = sig_residuals[:, feature]
+            lo = float(min(np.nanpercentile(bkg_vals, 0.5), np.nanpercentile(sig_vals, 0.5)))
+            hi = float(max(np.nanpercentile(bkg_vals, 99.5), np.nanpercentile(sig_vals, 99.5)))
+            if lo == hi:
+                lo, hi = lo - 1.0, hi + 1.0
+            bin_edges = np.linspace(lo, hi, bins + 1)
+            bkg_c, _ = np.histogram(bkg_vals, bins=bin_edges, density=True)
+            sig_c, _ = np.histogram(sig_vals, bins=bin_edges, density=True)
+            hep.histplot(bkg_c, bin_edges, ax=axis, histtype="step", linewidth=2, color="royalblue", label="Background (QCD)")
+            hep.histplot(sig_c, bin_edges, ax=axis, histtype="step", linewidth=2, color="crimson", linestyle="--", label=signal_label)
+            if feature == 0:
+                axis.legend(fontsize=9.5, loc="upper right")
+            axis.set_ylabel("Probability Density", fontsize=16)
+        else:
+            counts, edges = np.histogram(bkg_vals, bins=bins)
+            hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2, color="royalblue")
+            axis.set_ylabel("Nodes", fontsize=16)
+
+        axis.set_xlabel(f"Residual: {feature_names[feature]}", fontsize=15)
+        axis.tick_params(axis="both", labelsize=10)
     for empty in range(n_features, n_rows * n_columns):
         axes[empty // n_columns][empty % n_columns].axis("off")
 
@@ -694,9 +715,9 @@ def plot_latent_distributions(model, loader, file_name, device="cpu", max_batche
         axis = axes[dimension // n_columns][dimension % n_columns]
         counts, edges = np.histogram(latents[:, dimension], bins=bins)
         hep.histplot(counts, edges, ax=axis, histtype="step", linewidth=2, color="teal")
-        axis.set_xlabel(f"Latent {dimension}")
+        axis.set_xlabel(f"Latent {dimension}", fontsize=15)
         axis.set_ylabel("Nodes", fontsize=16)
-        axis.tick_params(axis="y", labelsize=10)
+        axis.tick_params(axis="both", labelsize=10)
     for empty in range(n_dimensions, n_rows * n_columns):
         axes[empty // n_columns][empty % n_columns].axis("off")
 
@@ -757,9 +778,9 @@ def plot_feature_correlations(model, loader, file_name, device="cpu", max_batche
         name = feature_names[f_idx]
         corr_str = f" ($r = {corr:.2f}$)" if not np.isnan(corr) else ""
         ax.text(0.06, 0.90, f"{name}{corr_str}", transform=ax.transAxes, fontsize=10.5, fontweight="bold")
-        ax.set_xlabel(f"True {name}", fontsize=10)
+        ax.set_xlabel(f"True {name}", fontsize=14)
         ax.set_ylabel(f"Reconstructed {name}", fontsize=14)
-        ax.tick_params(axis="both", labelsize=8.5)
+        ax.tick_params(axis="both", labelsize=10)
         ax.set_xlim(lo, hi)
         ax.set_ylim(lo, hi)
 
@@ -771,30 +792,33 @@ def plot_feature_correlations(model, loader, file_name, device="cpu", max_batche
     _save(figure, file_name, formats, show)
 
 
-def plot_feature_importance_ranking(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None, config=None):
+def plot_feature_importance_ranking(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None, config=None, signal_loader=None, signal_label="Signal"):
     """Rank features by reconstruction MSE in a horizontal bar chart."""
     import torch
 
     set_cms_style()
     model.eval()
-    errors = []
-    with torch.no_grad():
-        for index, batch in enumerate(loader):
-            if index >= max_batches:
-                break
-            batch = batch.to(device)
-            if hasattr(model, "encoder") and hasattr(model, "features_decoder"):
-                z = model.encoder(batch.x, batch.edge_index)
-                reconstructed = model.features_decoder(z, batch.edge_index)
-            else:
-                out = model(batch.x, batch.edge_index)
-                reconstructed = out[0] if isinstance(out, tuple) else out
-            errors.append((batch.x - reconstructed).square().detach().cpu().numpy())
 
-    if not errors:
+    def _calc_errors(b_loader):
+        errs = []
+        with torch.no_grad():
+            for index, batch in enumerate(b_loader):
+                if index >= max_batches:
+                    break
+                batch = batch.to(device)
+                if hasattr(model, "encoder") and hasattr(model, "features_decoder"):
+                    z = model.encoder(batch.x, batch.edge_index)
+                    reconstructed = model.features_decoder(z, batch.edge_index)
+                else:
+                    out = model(batch.x, batch.edge_index)
+                    reconstructed = out[0] if isinstance(out, tuple) else out
+                errs.append((batch.x - reconstructed).square().detach().cpu().numpy())
+        return np.concatenate(errs) if errs else None
+
+    errors = _calc_errors(loader)
+    if errors is None:
         return
 
-    errors = np.concatenate(errors)
     mse_per_feature = np.mean(errors, axis=0)
     n_features = len(mse_per_feature)
     names = get_lund_feature_names(n_features, config)
@@ -804,26 +828,40 @@ def plot_feature_importance_ranking(model, loader, file_name, device="cpu", max_
     sorted_names = [names[i] for i in sorted_indices]
     total_mse = float(np.sum(mse_per_feature))
 
+    sig_errors = _calc_errors(signal_loader) if signal_loader is not None else None
+    sorted_sig_mse = np.mean(sig_errors, axis=0)[sorted_indices] if sig_errors is not None else None
+
     figure, ax = plt.subplots(figsize=(10, max(5.0, 0.45 * n_features)))
-    bars = ax.barh(range(n_features), sorted_mse, color="royalblue", edgecolor="black", alpha=0.85, height=0.65)
-    ax.set_yticks(range(n_features))
-    ax.set_yticklabels(sorted_names, fontsize=8.5)
+    if sorted_sig_mse is not None:
+        bar_h = 0.36
+        y = np.arange(n_features)
+        ax.barh(y - bar_h / 2, sorted_mse, height=bar_h, color="royalblue", edgecolor="black", alpha=0.85, label="Background (QCD)")
+        ax.barh(y + bar_h / 2, sorted_sig_mse, height=bar_h, color="crimson", edgecolor="black", alpha=0.85, label=signal_label)
+        ax.set_yticks(y)
+        ax.set_yticklabels(sorted_names, fontsize=8.5)
+        ax.legend(fontsize=10.5, loc="lower right")
+        max_val = float(max(np.max(sorted_mse), np.max(sorted_sig_mse))) if len(sorted_mse) > 0 else 1.0
+        ax.set_xlim(0, max_val * 1.25)
+    else:
+        bars = ax.barh(range(n_features), sorted_mse, color="royalblue", edgecolor="black", alpha=0.85, height=0.65)
+        ax.set_yticks(range(n_features))
+        ax.set_yticklabels(sorted_names, fontsize=8.5)
+        max_val = float(np.max(sorted_mse)) if len(sorted_mse) > 0 else 1.0
+        for bar, val in zip(bars, sorted_mse):
+            pct = (val / total_mse * 100) if total_mse > 0 else 0
+            ax.text(val + max_val * 0.015, bar.get_y() + bar.get_height() / 2, f"{val:.4f} ({pct:.1f}%)", va="center", ha="left", fontsize=9.5)
+        ax.set_xlim(0, max_val * 1.3)
+
     ax.set_ylabel("Features", fontsize=16)
-    ax.set_xlabel("Reconstruction MSE", fontsize=12)
-    ax.tick_params(axis="x", labelsize=10)
+    ax.set_xlabel("Reconstruction MSE", fontsize=16)
+    ax.tick_params(axis="both", labelsize=10)
 
-    max_val = float(np.max(sorted_mse)) if len(sorted_mse) > 0 else 1.0
-    for bar, val in zip(bars, sorted_mse):
-        pct = (val / total_mse * 100) if total_mse > 0 else 0
-        ax.text(val + max_val * 0.015, bar.get_y() + bar.get_height() / 2, f"{val:.4f} ({pct:.1f}%)", va="center", ha="left", fontsize=9.5)
-
-    ax.set_xlim(0, max_val * 1.3)
     cms_label(ax, lumi=lumi, year=year)
     figure.tight_layout()
     _save(figure, file_name, formats, show)
 
 
-def plot_edge_calibration(model, loader, file_name, device="cpu", max_batches=20, bins=50, formats=("pdf",), show=False, lumi=None, year=None):
+def plot_edge_calibration(model, loader, file_name, device="cpu", max_batches=20, bins=50, formats=("pdf",), show=False, lumi=None, year=None, signal_loader=None, signal_label="Signal"):
     """Edge prediction probability distribution for true graph edges vs negative sampled non-edges."""
     import torch
     import mplhep as hep
@@ -837,36 +875,44 @@ def plot_edge_calibration(model, loader, file_name, device="cpu", max_batches=20
 
     set_cms_style()
     model.eval()
-    pos_probs, neg_probs = [], []
-    with torch.no_grad():
-        for index, batch in enumerate(loader):
-            if index >= max_batches:
-                break
-            batch = batch.to(device)
-            z = encoder(batch.x, batch.edge_index)
-            if batch.edge_index.shape[1] > 0:
-                p = edges_decoder(z, batch.edge_index, sigmoid=True)
-                pos_probs.append(p.detach().cpu().numpy())
-            neg_edge_index = batched_negative_sampling(batch.edge_index, batch.batch)
-            if neg_edge_index.shape[1] > 0:
-                np_prob = edges_decoder(z, neg_edge_index, sigmoid=True)
-                neg_probs.append(np_prob.detach().cpu().numpy())
 
-    if not pos_probs or not neg_probs:
+    def _get_probs(b_loader):
+        p_probs, n_probs = [], []
+        with torch.no_grad():
+            for index, batch in enumerate(b_loader):
+                if index >= max_batches:
+                    break
+                batch = batch.to(device)
+                z = encoder(batch.x, batch.edge_index)
+                if batch.edge_index.shape[1] > 0:
+                    p = edges_decoder(z, batch.edge_index, sigmoid=True)
+                    p_probs.append(p.detach().cpu().numpy())
+                neg_edge_index = batched_negative_sampling(batch.edge_index, batch.batch)
+                if neg_edge_index.shape[1] > 0:
+                    np_prob = edges_decoder(z, neg_edge_index, sigmoid=True)
+                    n_probs.append(np_prob.detach().cpu().numpy())
+        return (np.concatenate(p_probs) if p_probs else None), (np.concatenate(n_probs) if n_probs else None)
+
+    pos_probs, neg_probs = _get_probs(loader)
+    if pos_probs is None or neg_probs is None:
         return
 
-    pos_probs = np.concatenate(pos_probs)
-    neg_probs = np.concatenate(neg_probs)
+    sig_pos_probs = None
+    if signal_loader is not None:
+        sig_pos_probs, _ = _get_probs(signal_loader)
 
     figure, ax = plt.subplots(figsize=(10, 7.5))
     edges = np.linspace(0.0, 1.0, bins + 1)
     pos_counts, _ = np.histogram(pos_probs, bins=edges, density=True)
     neg_counts, _ = np.histogram(neg_probs, bins=edges, density=True)
 
-    hep.histplot(pos_counts, edges, ax=ax, label="True Edges ($A_{ij} = 1$)", color="royalblue", histtype="step", linewidth=2.2)
+    hep.histplot(pos_counts, edges, ax=ax, label="True Edges: QCD ($A_{ij} = 1$)", color="royalblue", histtype="step", linewidth=2.2)
+    if sig_pos_probs is not None:
+        sig_counts, _ = np.histogram(sig_pos_probs, bins=edges, density=True)
+        hep.histplot(sig_counts, edges, ax=ax, label=f"True Edges: {signal_label}", color="darkorange", linestyle="--", histtype="step", linewidth=2.2)
     hep.histplot(neg_counts, edges, ax=ax, label="Non-Edges ($A_{ij} = 0$, sampled)", color="crimson", histtype="step", linewidth=2.2)
 
-    ax.set_xlabel(r"Predicted Edge Probability $\hat{A}_{ij}$", fontsize=12)
+    ax.set_xlabel(r"Predicted Edge Probability $\hat{A}_{ij}$", fontsize=16)
     ax.set_ylabel("Probability Density", fontsize=16)
     ax.tick_params(axis="both", labelsize=10)
     ax.set_xlim(0.0, 1.0)
@@ -928,7 +974,7 @@ def plot_loss_vs_jet_kinematics(model, loader, file_name, device="cpu", max_batc
 
     m_mask = np.isfinite(jet_masses) & np.isfinite(losses)
     ax_m.hexbin(jet_masses[m_mask], losses[m_mask], gridsize=30, cmap="Blues", mincnt=1, bins="log")
-    ax_m.set_xlabel(r"Jet Mass $m_{\mathrm{jet}}$ (normalized / raw)", fontsize=11)
+    ax_m.set_xlabel(r"Jet Mass $m_{\mathrm{jet}}$ (normalized / raw)", fontsize=15)
     ax_m.set_ylabel("Reconstruction Loss", fontsize=15)
     ax_m.tick_params(axis="both", labelsize=10)
     ax_m.text(0.06, 0.90, "Reconstruction Loss vs Jet Mass", transform=ax_m.transAxes, fontsize=12, fontweight="bold")
@@ -937,7 +983,7 @@ def plot_loss_vs_jet_kinematics(model, loader, file_name, device="cpu", max_batc
     if has_pt:
         pt_mask = np.isfinite(jet_pts) & np.isfinite(losses)
         ax_pt.hexbin(jet_pts[pt_mask], losses[pt_mask], gridsize=30, cmap="Blues", mincnt=1, bins="log")
-        ax_pt.set_xlabel(r"Jet $p_T$ (normalized / raw)", fontsize=11)
+        ax_pt.set_xlabel(r"Jet $p_T$ (normalized / raw)", fontsize=15)
         ax_pt.set_ylabel("Reconstruction Loss", fontsize=15)
         ax_pt.tick_params(axis="both", labelsize=10)
         ax_pt.text(0.06, 0.90, r"Reconstruction Loss vs Jet $p_T$", transform=ax_pt.transAxes, fontsize=12, fontweight="bold")
@@ -983,7 +1029,7 @@ def plot_latent_pca_spectrum(model, loader, file_name, device="cpu", max_batches
 
     figure, ax1 = plt.subplots(figsize=(10, 7))
     ax1.bar(comp_range, var_ratio, color="royalblue", edgecolor="black", alpha=0.8, width=0.6, label="Individual component")
-    ax1.set_xlabel("Principal Component", fontsize=12)
+    ax1.set_xlabel("Principal Component", fontsize=16)
     ax1.set_ylabel("Explained Variance Ratio", fontsize=16, color="royalblue")
     ax1.set_xticks(comp_range)
     ax1.tick_params(axis="both", labelsize=10)
@@ -1004,7 +1050,7 @@ def plot_latent_pca_spectrum(model, loader, file_name, device="cpu", max_batches
     _save(figure, file_name, formats, show)
 
 
-def plot_latent_projection(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None):
+def plot_latent_projection(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None, signal_loader=None, signal_label="Signal"):
     """2D PCA projection of jet-level latent representations."""
     import torch
     from sklearn.decomposition import PCA
@@ -1015,42 +1061,53 @@ def plot_latent_projection(model, loader, file_name, device="cpu", max_batches=2
 
     set_cms_style()
     model.eval()
-    jet_latents, jet_losses = [], []
-    with torch.no_grad():
-        for index, batch in enumerate(loader):
-            if index >= max_batches:
-                break
-            batch = batch.to(device)
-            z = encoder(batch.x, batch.edge_index)
-            batch_np = batch.batch.detach().cpu().numpy()
-            z_np = z.detach().cpu().numpy()
-            tot, _, _ = model.score_batch(batch.x, batch.edge_index, batch.batch)
-            jet_losses.append(tot.detach().cpu().numpy())
 
-            n_graphs = int(batch_np.max()) + 1 if len(batch_np) > 0 else 0
-            for g_i in range(n_graphs):
-                mask = batch_np == g_i
-                if np.any(mask):
-                    jet_latents.append(np.mean(z_np[mask], axis=0))
+    def _extract_jet_latents(b_loader):
+        j_latents, j_losses = [], []
+        with torch.no_grad():
+            for index, batch in enumerate(b_loader):
+                if index >= max_batches:
+                    break
+                batch = batch.to(device)
+                z = encoder(batch.x, batch.edge_index)
+                batch_np = batch.batch.detach().cpu().numpy()
+                z_np = z.detach().cpu().numpy()
+                tot, _, _ = model.score_batch(batch.x, batch.edge_index, batch.batch)
+                j_losses.append(tot.detach().cpu().numpy())
 
-    if not jet_latents:
+                n_graphs = int(batch_np.max()) + 1 if len(batch_np) > 0 else 0
+                for g_i in range(n_graphs):
+                    mask = batch_np == g_i
+                    if np.any(mask):
+                        j_latents.append(np.mean(z_np[mask], axis=0))
+        return (np.array(j_latents) if j_latents else None), (np.concatenate(j_losses) if j_losses else None)
+
+    jet_latents, jet_losses = _extract_jet_latents(loader)
+    if jet_latents is None:
         return
 
-    jet_latents = np.array(jet_latents)
-    jet_losses = np.concatenate(jet_losses)
+    sig_jet_latents = None
+    if signal_loader is not None:
+        sig_jet_latents, _ = _extract_jet_latents(signal_loader)
 
     pca = PCA(n_components=2)
     coords = pca.fit_transform(jet_latents)
-
-    figure, ax = plt.subplots(figsize=(10, 8))
-    sc = ax.scatter(coords[:, 0], coords[:, 1], c=jet_losses, cmap="viridis", alpha=0.75, s=20, edgecolors="none")
-    cbar = figure.colorbar(sc, ax=ax, pad=0.03)
-    cbar.set_label("Reconstruction Loss", fontsize=16)
-    cbar.ax.tick_params(labelsize=10)
-
     var1 = pca.explained_variance_ratio_[0] * 100
     var2 = pca.explained_variance_ratio_[1] * 100
-    ax.set_xlabel(f"PC 1 ({var1:.1f}% var)", fontsize=12)
+
+    figure, ax = plt.subplots(figsize=(10, 8))
+    if sig_jet_latents is not None:
+        sig_coords = pca.transform(sig_jet_latents)
+        ax.scatter(coords[:, 0], coords[:, 1], color="royalblue", alpha=0.5, s=25, label="Background (QCD)", edgecolors="none")
+        ax.scatter(sig_coords[:, 0], sig_coords[:, 1], color="crimson", marker="^", alpha=0.85, s=35, label=signal_label, edgecolors="black", linewidth=0.5)
+        ax.legend(fontsize=11, loc="upper right")
+    else:
+        sc = ax.scatter(coords[:, 0], coords[:, 1], c=jet_losses, cmap="viridis", alpha=0.75, s=20, edgecolors="none")
+        cbar = figure.colorbar(sc, ax=ax, pad=0.03)
+        cbar.set_label("Reconstruction Loss", fontsize=16)
+        cbar.ax.tick_params(labelsize=10)
+
+    ax.set_xlabel(f"PC 1 ({var1:.1f}% var)", fontsize=16)
     ax.set_ylabel(f"PC 2 ({var2:.1f}% var)", fontsize=16)
     ax.tick_params(axis="both", labelsize=10)
     cms_label(ax, lumi=lumi, year=year)
@@ -1059,7 +1116,7 @@ def plot_latent_projection(model, loader, file_name, device="cpu", max_batches=2
     _save(figure, file_name, formats, show)
 
 
-def plot_xai_feature_saliency(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None, config=None):
+def plot_xai_feature_saliency(model, loader, file_name, device="cpu", max_batches=20, formats=("pdf",), show=False, lumi=None, year=None, config=None, signal_loader=None, signal_label="Signal"):
     """Global feature attribution ranking via gradient saliency / Integrated Gradients."""
     from utils.XaiUtils import compute_node_feature_saliency
 
@@ -1076,20 +1133,36 @@ def plot_xai_feature_saliency(model, loader, file_name, device="cpu", max_batche
     sorted_names = [names[i] for i in sorted_indices]
     total_sal = float(np.sum(saliency))
 
+    sig_saliency = None
+    if signal_loader is not None:
+        sig_saliency = compute_node_feature_saliency(model, signal_loader, device=device, max_batches=max_batches)
+    sorted_sig_sal = sig_saliency[sorted_indices] if sig_saliency is not None and len(sig_saliency) == n_features else None
+
     figure, ax = plt.subplots(figsize=(10, max(5.0, 0.45 * n_features)))
-    bars = ax.barh(range(n_features), sorted_sal, color="darkorange", edgecolor="black", alpha=0.85, height=0.65)
-    ax.set_yticks(range(n_features))
-    ax.set_yticklabels(sorted_names, fontsize=8.5)
+    if sorted_sig_sal is not None:
+        bar_h = 0.36
+        y = np.arange(n_features)
+        ax.barh(y - bar_h / 2, sorted_sal, height=bar_h, color="royalblue", edgecolor="black", alpha=0.85, label="Background (QCD)")
+        ax.barh(y + bar_h / 2, sorted_sig_sal, height=bar_h, color="darkorange", edgecolor="black", alpha=0.85, label=signal_label)
+        ax.set_yticks(y)
+        ax.set_yticklabels(sorted_names, fontsize=8.5)
+        ax.legend(fontsize=10.5, loc="lower right")
+        max_val = float(max(np.max(sorted_sal), np.max(sorted_sig_sal))) if len(sorted_sal) > 0 else 1.0
+        ax.set_xlim(0, max_val * 1.25)
+    else:
+        bars = ax.barh(range(n_features), sorted_sal, color="darkorange", edgecolor="black", alpha=0.85, height=0.65)
+        ax.set_yticks(range(n_features))
+        ax.set_yticklabels(sorted_names, fontsize=8.5)
+        max_val = float(np.max(sorted_sal)) if len(sorted_sal) > 0 else 1.0
+        for bar, val in zip(bars, sorted_sal):
+            pct = (val / total_sal * 100) if total_sal > 0 else 0
+            ax.text(val + max_val * 0.015, bar.get_y() + bar.get_height() / 2, f"{val:.4f} ({pct:.1f}%)", va="center", ha="left", fontsize=9.5)
+        ax.set_xlim(0, max_val * 1.3)
+
     ax.set_ylabel("Features", fontsize=16)
-    ax.set_xlabel(r"Integrated Gradients Attribution ($|x \cdot \nabla_x \mathcal{L}|$)")
-    ax.tick_params(axis="x", labelsize=10)
+    ax.set_xlabel(r"Integrated Gradients Attribution ($|x \cdot \nabla_x \mathcal{L}|$)", fontsize=16)
+    ax.tick_params(axis="both", labelsize=10)
 
-    max_val = float(np.max(sorted_sal)) if len(sorted_sal) > 0 else 1.0
-    for bar, val in zip(bars, sorted_sal):
-        pct = (val / total_sal * 100) if total_sal > 0 else 0
-        ax.text(val + max_val * 0.015, bar.get_y() + bar.get_height() / 2, f"{val:.4f} ({pct:.1f}%)", va="center", ha="left", fontsize=9.5)
-
-    ax.set_xlim(0, max_val * 1.3)
     cms_label(ax, lumi=lumi, year=year)
     figure.tight_layout()
     _save(figure, file_name, formats, show)
@@ -1116,3 +1189,39 @@ def plot_tree_with_scores(graph, node_scores, file_name, label="Reconstruction e
 
     figure.tight_layout()
     _save(figure, file_name, formats, show)
+
+
+def plot_paired_trees(graph_bkg, scores_bkg, graph_sig, scores_sig, file_name, label="Node Feature MSE", sig_label="Signal", formats=("pdf",), lumi=None, year=None):
+    """Draw side-by-side Lund trees for background and signal with a unified color scale."""
+    set_cms_style()
+    figure, (ax_bkg, ax_sig) = plt.subplots(1, 2, figsize=(28, 12))
+
+    root_bkg = max(graph_bkg.edge_index[0]).item() if graph_bkg.edge_index.numel() > 0 else 0
+    g_bkg = to_networkx(graph_bkg, to_undirected=True)
+    pos_bkg = hierarchy_pos(g_bkg, leaf_vs_root_factor=0.5, root=root_bkg)
+
+    root_sig = max(graph_sig.edge_index[0]).item() if graph_sig.edge_index.numel() > 0 else 0
+    g_sig = to_networkx(graph_sig, to_undirected=True)
+    pos_sig = hierarchy_pos(g_sig, leaf_vs_root_factor=0.5, root=root_sig)
+
+    vmin = float(min(np.nanmin(scores_bkg), np.nanmin(scores_sig)))
+    vmax = float(max(np.nanmax(scores_bkg), np.nanmax(scores_sig)))
+
+    nx.draw_networkx_edges(g_bkg, pos_bkg, ax=ax_bkg, alpha=0.35, edge_color="gray", width=1.5)
+    nx.draw_networkx_nodes(g_bkg, pos_bkg, nodelist=g_bkg.nodes(), node_color=scores_bkg, cmap="magma", vmin=vmin, vmax=vmax, node_size=320, ax=ax_bkg)
+    ax_bkg.text(0.05, 0.95, "Background (QCD)", transform=ax_bkg.transAxes, fontsize=16, fontweight="bold")
+    ax_bkg.axis("off")
+    cms_label(ax_bkg, lumi=lumi, year=year)
+
+    nx.draw_networkx_edges(g_sig, pos_sig, ax=ax_sig, alpha=0.35, edge_color="gray", width=1.5)
+    nodes_sig = nx.draw_networkx_nodes(g_sig, pos_sig, nodelist=g_sig.nodes(), node_color=scores_sig, cmap="magma", vmin=vmin, vmax=vmax, node_size=320, ax=ax_sig)
+    ax_sig.text(0.05, 0.95, f"Signal ({sig_label})", transform=ax_sig.transAxes, fontsize=16, fontweight="bold")
+    ax_sig.axis("off")
+    cms_label(ax_sig, lumi=lumi, year=year)
+
+    cb = figure.colorbar(nodes_sig, ax=ax_sig, pad=0.03, shrink=0.85)
+    cb.set_label(label, size=17)
+    cb.ax.tick_params(labelsize=10)
+
+    figure.subplots_adjust(top=0.92, bottom=0.05, left=0.03, right=0.95, wspace=0.1)
+    _save(figure, file_name, formats, False)
