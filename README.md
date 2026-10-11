@@ -410,6 +410,7 @@ The tests create temporary PFNanoAOD fixtures and cover:
 ```text
 run_pipeline.py             Master orchestrator for end-to-end GAE pipeline
 produce_graphs.py           Stage 1: Graph dataset production and caching
+check_produced_shards.py    Verify integrity and completeness of produced graph shards
 train_gae.py                Stage 2: Autoencoder model training and checkpointing
 score_gae.py                Stage 3: Streaming inference on ROOT files
 plot_gae.py                 Stage 4: Loss curves, ROC/SIC discrimination plots
@@ -670,6 +671,9 @@ Available models in `architectures/`:
 python condor/submit_condor.py --stage produce --samples background_2018 --files-per-job 5
 condor_submit condor/submit/produce.jdl
 
+# After produce jobs finish, verify all shards and chunk files:
+python condor/submit_condor.py --stage produce --verify --samples background_2018 --files-per-job 5
+
 # Submit training on a GPU slot:
 python condor/submit_condor.py --stage train --request-gpus 1
 condor_submit condor/submit/train.jdl
@@ -678,6 +682,34 @@ condor_submit condor/submit/train.jdl
 python condor/submit_condor.py --stage score --samples signal_2018 --files-per-job 5
 condor_submit condor/submit/score.jdl
 ```
+
+#### Verifying produced shards and resubmitting failed jobs
+
+After Condor graph production jobs finish, verify that all expected shards are present, complete, and uncorrupted:
+
+```bash
+# Verify using condor/submit_condor.py:
+python condor/submit_condor.py --stage produce --verify \
+    --samples background_2018 \
+    --files-per-job 5 \
+    --config gae_config_aimar.json
+
+# Or using the standalone check_produced_shards.py tool:
+python check_produced_shards.py --config gae_config_aimar.json \
+    --samples background_2018 \
+    --files-per-job 5
+
+# Or recursively scan any EOS directory / subdirectories directly:
+python check_produced_shards.py /eos/user/n/nparmar/SVJScouting/data_aimar_data_v2
+```
+
+The verification tool checks:
+- **Shard completeness**: Compares actual shards against expected totals calculated from the input JSON. Detects missing shards and incomplete shards (e.g. jobs that were evicted before writing `_meta.pt`).
+- **File integrity**: Concurrently inspects ZIP archive central directories and file sizes over 32 parallel threads (~60 s for ~4,000 files on EOS), catching truncated files and `PytorchStreamReader` central directory errors.
+- **Automatic resubmission**: If any failed or corrupted shards are detected, it automatically writes `condor/submit/produce_resubmit.jdl` queued with **only** the failed shards:
+  ```bash
+  condor_submit condor/submit/produce_resubmit.jdl
+  ```
 
 #### CRAB
 Per-file production and scoring are supported through `crab/crabConfig_gae.py`,
