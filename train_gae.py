@@ -22,6 +22,7 @@ except ImportError:
 import argparse
 import json
 import os
+import resource
 import time
 
 import torch
@@ -84,23 +85,29 @@ def parse_arguments():
         default=1,
         help="Frequency of saving checkpoint_latest.pt during training (default: 1)",
     )
+    parser.add_argument("--val-every-n-epochs", type=int, default=1, help="Frequency of running validation during training (default: 1)")
     parser.add_argument("--device", default=None)
     parser.add_argument("--amp", action="store_true", default=None, help="Enable Automatic Mixed Precision (AMP)")
     parser.add_argument("--no-amp", action="store_true", default=None, help="Explicitly disable Automatic Mixed Precision")
-    parser.add_argument(
-        "--comet",
-        action="store_true",
-        default=False,
-        help="Enable Comet ML tracking (requires comet-ml in venv)",
-    )
+    parser.add_argument("--comet", action="store_true", default=False, help="Enable Comet ML tracking (requires comet-ml in venv)")
     parser.add_argument("--no-comet", action="store_true", help="Explicitly disable Comet ML tracking")
+    parser.add_argument("--comet-experiment-key", default=None, help="Explicit Comet experiment key to resume")
+    parser.add_argument("--new-comet-experiment", action="store_true", default=False, help="Force creating a new Comet experiment even when resuming training")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--chunk-cache-size", "--gae-chunk-cache-size", dest="chunk_cache_size", type=int, default=None, help="In-memory chunk cache size override (overwrites GAE_CHUNK_CACHE_SIZE)")
+    parser.add_argument("--num-workers", type=int, default=None, help="Number of DataLoader worker processes (default: 0)")
+    parser.add_argument("--pin-memory", action="store_true", default=None, help="Enable pinned host memory for DataLoader")
+    parser.add_argument("--no-pin-memory", action="store_true", default=None, help="Explicitly disable pinned host memory")
+    parser.add_argument("--negative-sampler", choices=["gpu", "cpu"], default="gpu", help="Negative edge sampler: 'gpu' (fast vectorized GPU sampler) or 'cpu' (legacy PyG sampler) (default: gpu)")
+    parser.add_argument("--val-batch-size", type=int, default=None, help="Batch size for validation and testing (default: 2 * train batch size)")
+    parser.add_argument("--persistent-workers", action="store_true", default=None, help="Keep DataLoader worker processes alive across epochs")
+    parser.add_argument("--no-persistent-workers", action="store_true", default=None, help="Explicitly disable persistent DataLoader worker processes")
     return parser.parse_args()
 
 
 def training_settings(config, args):
     settings = dict(config.training)
-    for name in ("epochs", "batch_size", "learning_rate", "alpha", "seed"):
+    for name in ("epochs", "batch_size", "learning_rate", "alpha", "seed", "num_workers"):
         value = getattr(args, name)
         if value is not None:
             settings[name] = value
@@ -137,42 +144,42 @@ def resolve_training_samples(config, args):
     return samples
 
 
-def start_experiment(config, settings, samples, args):
+def start_experiment(config, settings, samples, args, resume_experiment_key=None, run_name=None):
     """Return a comet experiment, or None when logging locally only."""
-    want_comet = getattr(args, "comet", False) or (
-        config.training.get("log_comet", False) and not args.no_comet
-    )
+    want_comet = getattr(args, "comet", False) or (config.training.get("log_comet", False) and not args.no_comet)
     if args.no_comet or not want_comet:
         return None
     if comet_ml is None:
-        print(
-            "Notice: Comet ML was requested, but 'comet_ml' is not installed in the current environment.\n"
-            "To enable Comet logging, create and source the layered venv:\n"
-            "  source setup_gae_env.sh\n"
-            "Continuing with local logging."
-        )
-        return None
-    try:
-        api_key = os.environ.get("COMET_API_KEY", "8pkRGAjV7ZfkZfIKjdQQPCQuT")
-        experiment = comet_ml.Experiment(
-            api_key=api_key,
-            project_name=config.training.get("comet_project", "svj-gae"),
-        )
-    except Exception as error:
-        print(f"Could not start a comet experiment ({error}); logging locally only.")
+        print("Notice: Comet ML was requested, but 'comet_ml' is not installed in the current environment.\nTo enable Comet logging, create and source the layered venv:\n  source setup_gae_env.sh\nContinuing with local logging.")
         return None
 
+    base_project = config.training.get("comet_project", "svj-gae")
+    project_name = f"{base_project}_{args.run_name}" if getattr(args, "run_name", None) else base_project
+
+    api_key = os.environ.get("COMET_API_KEY", "8pkRGAjV7ZfkZfIKjdQQPCQuT")
+    experiment = None
+    if resume_experiment_key:
+        try:
+            print(f"Resuming existing Comet experiment: {resume_experiment_key} (project: {project_name})")
+            experiment = comet_ml.ExistingExperiment(api_key=api_key, previous_experiment=resume_experiment_key, project_name=project_name)
+        except Exception as error:
+            print(f"Notice: Could not resume existing Comet experiment ({error}); starting a new experiment instead.")
+
+    if experiment is None:
+        try:
+            experiment = comet_ml.Experiment(api_key=api_key, project_name=project_name)
+        except Exception as error:
+            print(f"Could not start a comet experiment ({error}); logging locally only.")
+            return None
+
+    if run_name and hasattr(experiment, "set_name"):
+        experiment.set_name(run_name)
+
     experiment.log_parameters(settings)
-    experiment.log_parameters(
-        {f"graph_{key}": value for key, value in config.graph.items()}
-    )
+    experiment.log_parameters({f"graph_{key}": value for key, value in config.graph.items()})
     experiment.log_parameter("model_spec", config.model.spec)
-    experiment.log_parameters(
-        {f"model_{key}": value for key, value in config.model.kwargs.items()}
-    )
-    experiment.log_parameter(
-        "train_samples", ",".join(sample.name for sample in samples)
-    )
+    experiment.log_parameters({f"model_{key}": value for key, value in config.model.kwargs.items()})
+    experiment.log_parameter("train_samples", ",".join(sample.name for sample in samples))
     return experiment
 
 
@@ -185,13 +192,59 @@ def evaluate(model, loader, alpha, device, description, verbose, use_amp=False):
     model.eval()
     totals = torch.zeros(3, dtype=torch.float64)
     n_batches = 0
-    with torch.no_grad():
-        for batch in tqdm(loader, desc=description, disable=not verbose, leave=False):
+    t_data_total = 0.0
+    t_eval_total = 0.0
+    t_prev = time.perf_counter()
+    pbar = tqdm(loader, desc=description, disable=not verbose, leave=False)
+    with torch.inference_mode():
+        for batch_idx, batch in enumerate(pbar):
+            t_data = time.perf_counter() - t_prev
+            t_data_total += t_data
+            t_eval_start = time.perf_counter()
             batch = batch.to(device, non_blocking=True)
             with torch.amp.autocast(device_type=device.type, enabled=use_amp):
                 total, edges, features = training_loss(model, batch, alpha)
+            t_eval = time.perf_counter() - t_eval_start
+            t_eval_total += t_eval
             totals += torch.tensor([total.item(), edges.item(), features.item()], dtype=torch.float64)
             n_batches += 1
+
+            if batch_idx == 0 and verbose:
+                try:
+                    import psutil
+                    proc = psutil.Process()
+                    cpu_pct = proc.cpu_percent()
+                    mem_rss = proc.memory_info().rss / (1024**2)
+                except Exception:
+                    cpu_pct = 0.0
+                    mem_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                gpu_str = f"GPU allocated: {torch.cuda.memory_allocated(device) / 1024**2:.2f} MiB, reserved: {torch.cuda.memory_reserved(device) / 1024**2:.2f} MiB" if device.type == "cuda" else "Device: CPU"
+                print(f"{description} Batch 0 diagnostics: Data I/O={t_data:.2f}s, Eval={t_eval:.2f}s | CPU RSS={mem_rss:.1f} MiB, CPU={cpu_pct:.1f}% | {gpu_str}")
+
+            if verbose and (batch_idx + 1) % 25 == 0:
+                avg_io = t_data_total / (batch_idx + 1)
+                avg_eval = t_eval_total / (batch_idx + 1)
+                pbar_str = f"I/O: {avg_io:.2f}s, Eval: {avg_eval:.2f}s"
+                if device.type == "cuda":
+                    pbar_str += f", GPU: {torch.cuda.memory_allocated(device) / 1024**2:.0f}/{torch.cuda.memory_reserved(device) / 1024**2:.0f}MB"
+                pbar.set_postfix_str(pbar_str)
+
+            t_prev = time.perf_counter()
+
+    if verbose and n_batches > 0:
+        t_loop_tot = t_data_total + t_eval_total
+        pct_io = (t_data_total / t_loop_tot * 100) if t_loop_tot > 0 else 0
+        pct_eval = (t_eval_total / t_loop_tot * 100) if t_loop_tot > 0 else 0
+        try:
+            import psutil
+            proc = psutil.Process()
+            cpu_pct = proc.cpu_percent()
+            mem_rss = proc.memory_info().rss / (1024**2)
+        except Exception:
+            cpu_pct = 0.0
+            mem_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        print(f"{description} timing diagnostics: Data I/O={t_data_total:.1f}s ({pct_io:.1f}%), Eval={t_eval_total:.1f}s ({pct_eval:.1f}%) | CPU RSS={mem_rss:.1f} MiB, CPU={cpu_pct:.1f}%")
+
     if not n_batches:
         return None
     return (totals / n_batches).tolist()
@@ -223,6 +276,12 @@ def main():
         else ("cuda" if torch.cuda.is_available() else "cpu")
     )
     print(f"Using device {device}")
+    if torch.cuda.is_available():
+        print(f"Device Name: {torch.cuda.get_device_name(0)}")
+        print(f"Allocated Memory: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MiB")
+        print(f"Cached/Reserved Memory: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MiB")
+    else:
+        print("CUDA is not available in this kernel.")
     use_amp = (device.type == "cuda") if args.amp is None and not args.no_amp else (bool(args.amp) and not args.no_amp)
     print(f"Automatic Mixed Precision (AMP): {'enabled' if use_amp else 'disabled'}")
     scaler = torch.amp.GradScaler("cuda", enabled=(use_amp and device.type == "cuda"))
@@ -255,6 +314,11 @@ def main():
     os.makedirs(output_dir, exist_ok=True)
     print(f"Model: {config.model.spec}")
     print(f"Model checkpoint directory: {os.path.abspath(output_dir)}")
+    if args.chunk_cache_size is not None:
+        os.environ["GAE_CHUNK_CACHE_SIZE"] = str(args.chunk_cache_size)
+    gae_cache_env = os.environ.get("GAE_CHUNK_CACHE_SIZE")
+    effective_chunks = int(gae_cache_env) if gae_cache_env else 2
+    print(f"Chunk cache configuration: GAE_CHUNK_CACHE_SIZE={gae_cache_env}, n_cached_chunks={effective_chunks}")
 
     checkpoint_data = None
     if args.resume is not None:
@@ -277,11 +341,26 @@ def main():
         print(f"Loading checkpoint for resumption from '{resume_path}'...")
         checkpoint_data = torch.load(resume_path, map_location="cpu", weights_only=False)
 
+    resume_experiment_key = None
+    if not args.new_comet_experiment:
+        if args.comet_experiment_key:
+            resume_experiment_key = args.comet_experiment_key
+        elif checkpoint_data is not None:
+            resume_experiment_key = checkpoint_data.get("comet_experiment_key")
+            want_comet = getattr(args, "comet", False) or (config.training.get("log_comet", False) and not args.no_comet)
+            if resume_experiment_key is None and want_comet:
+                print("Notice: No Comet experiment key found in loaded checkpoint; creating a new Comet experiment.")
+
     train_window = [list(settings["train_window"]) for _ in dataset_paths]
     validation_window = [
         list(settings["validation_window"]) for _ in dataset_paths
     ]
     test_window = [list(settings["test_window"]) for _ in dataset_paths]
+
+    num_workers = args.num_workers if args.num_workers is not None else settings.get("num_workers", 0)
+    pin_memory = False if args.no_pin_memory else (True if args.pin_memory else settings.get("pin_memory", (device.type == "cuda")))
+    val_batch_size = args.val_batch_size if args.val_batch_size is not None else (2 * settings["batch_size"])
+    persistent_workers = False if (args.no_persistent_workers or num_workers == 0) else (True if args.persistent_workers else (num_workers > 0))
 
     if (
         checkpoint_data is not None
@@ -297,13 +376,8 @@ def main():
         print("Reusing normalization statistics and split state from checkpoint.")
     else:
         # Normalization statistics come from the training partition only.
-        stats_loader = GraphDataLoader(
-            dataset_paths=dataset_paths,
-            split_windows=train_window,
-            split_seed=settings["split_seed"],
-            sampling="sequential",
-            batch_size=settings["batch_size"],
-        )
+        stats_loader = GraphDataLoader(dataset_paths=dataset_paths, split_windows=train_window, split_seed=settings["split_seed"], sampling="sequential", batch_size=settings["batch_size"], num_workers=num_workers, pin_memory=pin_memory)
+        print(f"Stats DataLoader: num_workers={stats_loader.num_workers}, pin_memory={stats_loader.pin_memory}")
         split_state = stats_loader.get_split_state()
         num_features = stats_loader.dataset[0].num_node_features
         if config.graph.get("use_lund_decomp"):
@@ -319,44 +393,28 @@ def main():
                     f"(save_4vectors_in_lund_tree={config.graph.get('save_4vectors_in_lund_tree', False)}). "
                     f"Training aborted to prevent training on an incompatible dataset."
                 )
-        means, stds = compute_normalization_stats(
-            stats_loader, num_features, verbose=verbose
-        )
+        means, stds = compute_normalization_stats(stats_loader, num_features, verbose=verbose)
+        del stats_loader
+        if torch.cuda.is_available():
+            print(f"Device Name: {torch.cuda.get_device_name(0)}")
+            print(f"Allocated Memory: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MiB")
+            print(f"Cached/Reserved Memory: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MiB")
+        else:
+            print("CUDA is not available in this kernel.")
 
     normalizer = OnTheFlyNormalizer(["x"], means, stds)
 
-    loader_training = GraphDataLoader(
-        dataset_paths=dataset_paths,
-        split_windows=train_window,
-        split_state=split_state,
-        sampling=settings["sampling"],
-        normalizer=normalizer,
-        batch_size=settings["batch_size"],
-    )
-    loader_validation = GraphDataLoader(
-        dataset_paths=dataset_paths,
-        split_windows=validation_window,
-        split_state=split_state,
-        sampling="sequential",
-        normalizer=normalizer,
-        batch_size=settings["batch_size"],
-    )
-    loader_testing = GraphDataLoader(
-        dataset_paths=dataset_paths,
-        split_windows=test_window,
-        split_state=split_state,
-        sampling="sequential",
-        normalizer=normalizer,
-        batch_size=settings["batch_size"],
-    )
+    loader_training = GraphDataLoader(dataset_paths=dataset_paths, split_windows=train_window, split_state=split_state, sampling=settings["sampling"], normalizer=normalizer, batch_size=settings["batch_size"], num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
+    print(f"Training DataLoader: num_workers={loader_training.num_workers}, pin_memory={loader_training.pin_memory}, persistent_workers={getattr(loader_training, 'persistent_workers', False)}")
+    loader_validation = GraphDataLoader(dataset_paths=dataset_paths, split_windows=validation_window, split_state=split_state, sampling="sequential", normalizer=normalizer, batch_size=val_batch_size, num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
+    print(f"Validation DataLoader: num_workers={loader_validation.num_workers}, batch_size={val_batch_size}, pin_memory={loader_validation.pin_memory}, persistent_workers={getattr(loader_validation, 'persistent_workers', False)}")
+    loader_testing = GraphDataLoader(dataset_paths=dataset_paths, split_windows=test_window, split_state=split_state, sampling="sequential", normalizer=normalizer, batch_size=val_batch_size, num_workers=num_workers, pin_memory=pin_memory, persistent_workers=persistent_workers)
 
-    model = build_model(
-        config.model.spec, num_features, **config.model.kwargs
-    ).to(device)
-    print(f"Built model {config.model.spec} ({num_features} node features) on {device}")
-    optimizer = torch.optim.Adam(
-        model.parameters(), lr=settings["learning_rate"]
-    )
+    model = build_model(config.model.spec, num_features, **config.model.kwargs).to(device)
+    if hasattr(model, "negative_sampler"):
+        model.negative_sampler = args.negative_sampler
+    print(f"Built model {config.model.spec} ({num_features} node features) on {device} (negative_sampler={getattr(model, 'negative_sampler', args.negative_sampler)})")
+    optimizer = torch.optim.Adam(model.parameters(), lr=settings["learning_rate"])
     alpha = settings["alpha"]
 
     start_epoch = 0
@@ -397,6 +455,7 @@ def main():
         total_epochs = settings["epochs"]
 
     print(f"Training schedule: starting at epoch {start_epoch}, targeting total {total_epochs} epochs.")
+    experiment = None
 
     def save_checkpoint(path, current_epoch, current_best_loss):
         saved_graph = dict(config.graph)
@@ -429,9 +488,15 @@ def main():
             "training": settings,
             "train_samples": [sample.name for sample in samples],
         }
+        comet_key = None
+        if experiment is not None:
+            comet_key = experiment.get_key() if hasattr(experiment, "get_key") else getattr(experiment, "id", None)
+        elif checkpoint_data is not None:
+            comet_key = checkpoint_data.get("comet_experiment_key")
+        payload["comet_experiment_key"] = comet_key
         torch.save(payload, path)
 
-    experiment = start_experiment(config, settings, samples, args)
+    experiment = start_experiment(config, settings, samples, args, resume_experiment_key=resume_experiment_key, run_name=run_name)
     if experiment is not None and checkpoint_data is not None:
         experiment.log_parameter("resumed_from_epoch", start_epoch)
 
@@ -448,18 +513,24 @@ def main():
             n_batches = 0
             optimizer.zero_grad()
 
-            for batch_idx, batch in enumerate(
-                tqdm(
-                    loader_training,
-                    desc=f"Epoch {epoch}",
-                    disable=not verbose,
-                    leave=False,
-                )
-            ):
+            t_data_total = 0.0
+            t_loss_total = 0.0
+            t_bwd_total = 0.0
+            t_prev = time.perf_counter()
+            pbar = tqdm(loader_training, desc=f"Epoch {epoch}", disable=not verbose, leave=False)
+
+            for batch_idx, batch in enumerate(pbar):
+                t_data = time.perf_counter() - t_prev
+                t_data_total += t_data
+
+                t_loss_start = time.perf_counter()
                 batch = batch.to(device, non_blocking=True)
                 with torch.amp.autocast(device_type=device.type, enabled=use_amp):
                     total, edges, features = training_loss(model, batch, alpha)
+                t_loss = time.perf_counter() - t_loss_start
+                t_loss_total += t_loss
 
+                t_bwd_start = time.perf_counter()
                 scaler.scale(total / args.accumulate_grad_batches).backward()
                 if (batch_idx + 1) % args.accumulate_grad_batches == 0 or (
                     batch_idx + 1
@@ -467,6 +538,8 @@ def main():
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad()
+                t_bwd = time.perf_counter() - t_bwd_start
+                t_bwd_total += t_bwd
 
                 values = [total.item(), edges.item(), features.item()]
                 history["batch_total"].append(values[0])
@@ -475,19 +548,53 @@ def main():
                 epoch_totals += torch.tensor(values, dtype=torch.float64)
                 n_batches += 1
 
+                if batch_idx == 0 and verbose:
+                    try:
+                        import psutil
+                        proc = psutil.Process()
+                        cpu_pct = proc.cpu_percent()
+                        mem_rss = proc.memory_info().rss / (1024**2)
+                    except Exception:
+                        cpu_pct = 0.0
+                        mem_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                    gpu_str = f"GPU allocated: {torch.cuda.memory_allocated(device) / 1024**2:.2f} MiB, reserved: {torch.cuda.memory_reserved(device) / 1024**2:.2f} MiB" if device.type == "cuda" else "Device: CPU"
+                    print(f"Epoch {epoch} Batch 0 diagnostics: Data I/O={t_data:.2f}s, Loss={t_loss:.2f}s, Bwd+Opt={t_bwd:.2f}s | CPU RSS={mem_rss:.1f} MiB, CPU={cpu_pct:.1f}% | {gpu_str}")
+
+                if verbose and (batch_idx + 1) % 25 == 0:
+                    avg_io = t_data_total / (batch_idx + 1)
+                    avg_loss = t_loss_total / (batch_idx + 1)
+                    avg_bwd = t_bwd_total / (batch_idx + 1)
+                    pbar_str = f"I/O: {avg_io:.2f}s, Loss: {avg_loss:.2f}s, Bwd: {avg_bwd:.2f}s"
+                    if device.type == "cuda":
+                        pbar_str += f", GPU: {torch.cuda.memory_allocated(device) / 1024**2:.0f}/{torch.cuda.memory_reserved(device) / 1024**2:.0f}MB"
+                    pbar.set_postfix_str(pbar_str)
+
+                t_prev = time.perf_counter()
+
+            if verbose and n_batches > 0:
+                t_loop_tot = t_data_total + t_loss_total + t_bwd_total
+                pct_io = (t_data_total / t_loop_tot * 100) if t_loop_tot > 0 else 0
+                pct_loss = (t_loss_total / t_loop_tot * 100) if t_loop_tot > 0 else 0
+                pct_bwd = (t_bwd_total / t_loop_tot * 100) if t_loop_tot > 0 else 0
+                try:
+                    import psutil
+                    proc = psutil.Process()
+                    cpu_pct = proc.cpu_percent()
+                    mem_rss = proc.memory_info().rss / (1024**2)
+                except Exception:
+                    cpu_pct = 0.0
+                    mem_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+                print(f"Epoch {epoch} timing diagnostics: Data I/O={t_data_total:.1f}s ({pct_io:.1f}%), Loss={t_loss_total:.1f}s ({pct_loss:.1f}%), Bwd+Opt={t_bwd_total:.1f}s ({pct_bwd:.1f}%) | CPU RSS={mem_rss:.1f} MiB, CPU={cpu_pct:.1f}%")
+
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 
             train_losses = (epoch_totals / max(n_batches, 1)).tolist()
-            validation_losses = evaluate(
-                model,
-                loader_validation,
-                alpha,
-                device,
-                f"Validation {epoch}",
-                verbose,
-                use_amp=use_amp,
-            )
+            should_validate = ((epoch + 1 - start_epoch) % args.val_every_n_epochs == 0) or (epoch + 1 == total_epochs)
+            if should_validate:
+                validation_losses = evaluate(model, loader_validation, alpha, device, f"Validation {epoch}", verbose, use_amp=use_amp)
+            else:
+                validation_losses = None
             history["epoch_train"].append(train_losses)
             history["epoch_validation"].append(validation_losses)
 
@@ -508,6 +615,12 @@ def main():
                     f"(edges {validation_losses[1]:.5f}, nodes {validation_losses[2]:.5f})"
                 )
             print(message)
+            if torch.cuda.is_available():
+                print(f"Device Name: {torch.cuda.get_device_name(0)}")
+                print(f"Allocated Memory: {torch.cuda.memory_allocated(0) / 1024**2:.2f} MiB")
+                print(f"Cached/Reserved Memory: {torch.cuda.memory_reserved(0) / 1024**2:.2f} MiB")
+            else:
+                print("CUDA is not available in this kernel.")
 
             if experiment is not None:
                 experiment.log_metric("train_total", train_losses[0], epoch=epoch, step=epoch)
