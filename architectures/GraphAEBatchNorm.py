@@ -60,22 +60,16 @@ class FeaturesDecoderBatchNorm(torch.nn.Module):
 class GraphAEBatchNorm(torch.nn.Module):
     """Graph autoencoder with BatchNorm matching Aimar's architecture and SVJ_GNN contract."""
 
-    def __init__(
-        self,
-        num_features: int = 12,
-        architecture=(115, 170, 200, 115),
-        dropout: float = 0.1,
-    ):
+    def __init__(self, num_features: int = 12, architecture=(115, 170, 200, 115), dropout: float = 0.1, negative_sampler: str = "gpu"):
         super().__init__()
         self.encoder = EncoderBatchNorm(num_features, architecture, dropout)
         self.edges_decoder = InnerProductDecoder()
-        self.features_decoder = FeaturesDecoderBatchNorm(
-            num_features, architecture, dropout
-        )
+        self.features_decoder = FeaturesDecoderBatchNorm(num_features, architecture, dropout)
         self.register_buffer("center", torch.zeros(architecture[-1]))
         self.architecture = tuple(architecture)
         self.num_features = num_features
         self.dropout = dropout
+        self.negative_sampler = negative_sampler
 
     def encode(
         self,
@@ -122,9 +116,31 @@ class GraphAEBatchNorm(torch.nn.Module):
 
         return positive_loss + negative_loss
 
+    def _sample_negative_edges_gpu(self, edge_index, batch):
+        num_edges = edge_index.shape[1]
+        if num_edges == 0:
+            return edge_index.new_empty((2, 0))
+        n_graphs = int(batch[-1].item()) + 1 if batch.numel() > 0 else 0
+        node_counts = torch.bincount(batch, minlength=n_graphs)
+        ptr = torch.cat([batch.new_zeros(1), torch.cumsum(node_counts, dim=0)])
+        edge_graph = batch[edge_index[0]]
+        g_start = ptr[edge_graph]
+        g_len = node_counts[edge_graph]
+        u_offset = torch.randint(0, 1000000, (num_edges,), device=edge_index.device) % g_len
+        delta = 1 + (torch.randint(0, 1000000, (num_edges,), device=edge_index.device) % (g_len - 1).clamp_min(1))
+        v_offset = (u_offset + delta) % g_len
+        rand_src = g_start + u_offset
+        rand_dst = g_start + v_offset
+        return torch.stack([rand_src, rand_dst], dim=0)
+
     def training_loss(self, batch, alpha=1.0):
         z = self.encoder(batch.x, batch.edge_index)
-        negative_edges = batched_negative_sampling(batch.edge_index, batch.batch)
+        if getattr(self, "negative_sampler", "gpu") == "cpu":
+            negative_edges = batched_negative_sampling(batch.edge_index, batch.batch)
+        elif not self.training:
+            negative_edges = None
+        else:
+            negative_edges = self._sample_negative_edges_gpu(batch.edge_index, batch.batch)
         edges = self.edges_loss(batch.x, batch.edge_index, negative_edges, z=z)
         features = self.features_loss(batch.x, batch.edge_index, z=z)
         return edges + alpha * features, edges, features
