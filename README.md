@@ -410,7 +410,6 @@ The tests create temporary PFNanoAOD fixtures and cover:
 ```text
 run_pipeline.py             Master orchestrator for end-to-end GAE pipeline
 produce_graphs.py           Stage 1: Graph dataset production and caching
-check_produced_shards.py    Verify integrity and completeness of produced graph shards
 train_gae.py                Stage 2: Autoencoder model training and checkpointing
 score_gae.py                Stage 3: Streaming inference on ROOT files
 plot_gae.py                 Stage 4: Loss curves, ROC/SIC discrimination plots
@@ -694,13 +693,7 @@ python condor/submit_condor.py --stage produce --verify \
     --files-per-job 5 \
     --config gae_config_aimar.json
 
-# Or using the standalone check_produced_shards.py tool:
-python check_produced_shards.py --config gae_config_aimar.json \
-    --samples background_2018 \
-    --files-per-job 5
 
-# Or recursively scan any EOS directory / subdirectories directly:
-python check_produced_shards.py /eos/user/n/nparmar/SVJScouting/data_aimar_data_v2
 ```
 
 The verification tool checks:
