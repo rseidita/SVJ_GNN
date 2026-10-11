@@ -230,7 +230,7 @@ class JetGraphProducer(Dataset):
         self.chunk_size = self.graphs_per_chunk
         self.processing_batch_size = self.event_batch_size
         cache_env = os.environ.get("GAE_CHUNK_CACHE_SIZE")
-        self._n_cached_chunks = int(cache_env) if cache_env else (50 if n_cached_chunks == 2 else n_cached_chunks)
+        self._n_cached_chunks = int(cache_env) if cache_env else int(n_cached_chunks)
         self.validate_cache_config = validate_cache_config
         self.num_workers = int(num_workers)
         self.worker_prefetch = int(worker_prefetch)
@@ -733,11 +733,13 @@ class JetGraphProducer(Dataset):
             # Move to the end to mark as most-recently used
             self._chunk_cache.move_to_end(chunk_idx)
 
-        # Return a clone so that in-place transforms applied by __getitem__
-        # (e.g. OnTheFlyNormalizer) do not corrupt the cached graph objects.
-        # Without this, the second access of the same graph would receive an
-        # already-transformed tensor and produce inf/nan values.
-        return self._chunk_cache[chunk_idx][pos].clone()
+        # Return a clone when an in-place transform is applied by __getitem__
+        # (e.g. OnTheFlyNormalizer) so cached graphs are not corrupted.
+        # When transform is None (e.g. on-GPU normalization), avoid copying.
+        graph = self._chunk_cache[chunk_idx][pos]
+        if self.transform is not None:
+            return graph.clone()
+        return graph
 
     def process(self):
         # Stream graphs from every input file and write them to disk in
