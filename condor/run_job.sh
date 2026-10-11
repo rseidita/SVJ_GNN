@@ -21,7 +21,7 @@ tar -xzf SVJ_GNN.tar.gz
 cd SVJ_GNN
 
 source setup_gae_env.sh
-GAE_CHUNK_CACHE_SIZE=1
+export GAE_CHUNK_CACHE_SIZE=2
 if [ -n "${GAE_OUTPUT_EOS}" ] && [ -d "${GAE_OUTPUT_EOS}" ]; then
     for d in $(ls "${GAE_OUTPUT_EOS}" 2>/dev/null); do
         if [ -d "${GAE_OUTPUT_EOS}/${d}" ] && [ ! -e "${d}" ]; then

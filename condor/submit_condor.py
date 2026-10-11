@@ -37,6 +37,7 @@ TAR_EXCLUDES = (
     "SVJ_GNN/scores",
     "SVJ_GNN/output_scores",
     "SVJ_GNN/output_scores_aimar",
+    "SVJ_GNN/data_aimar_graphs_V3"
     "SVJ_GNN/plots",
     "SVJ_GNN/plots_aimar",
     "SVJ_GNN/training",
@@ -45,6 +46,7 @@ TAR_EXCLUDES = (
     "*.ipynb",
     "*.root",
     "__pycache__",
+    "SVJ_GNN/condor/submit/*",
 )
 
 
@@ -61,6 +63,8 @@ def resolve_and_prepare_proxy(proxy_arg=None):
     legacy_proxy = os.path.join(home, "x509up_file")
 
     source = proxy_arg
+    if source and os.path.isdir(source):
+        source = os.path.join(source, f"x509up_u{os.getuid()}")
     if not source:
         if os.path.exists(uid_proxy) and os.path.exists(afs_proxy):
             source = uid_proxy if os.path.getmtime(uid_proxy) > os.path.getmtime(afs_proxy) else afs_proxy
@@ -194,6 +198,16 @@ def parse_arguments():
         default=None,
         help="Frequency of saving checkpoint_latest.pt during training (train stage only)",
     )
+    parser.add_argument("--accumulate-grad-batches", type=int, default=None, help="Number of batches to accumulate gradients over (useful for limited GPU memory)")
+    parser.add_argument("--chunk-cache-size", "--gae-chunk-cache-size", dest="chunk_cache_size", type=int, default=None, help="In-memory chunk cache size override for training")
+    parser.add_argument("--num-workers", type=int, default=None, help="Number of worker processes for multiprocessing stages")
+    parser.add_argument("--pin-memory", action="store_true", default=None, help="Enable pinned host memory for DataLoader")
+    parser.add_argument("--no-pin-memory", action="store_true", default=None, help="Explicitly disable pinned host memory")
+    parser.add_argument("--negative-sampler", choices=["gpu", "cpu"], default="gpu", help="Negative edge sampler: 'gpu' (fast vectorized GPU sampler) or 'cpu' (legacy PyG sampler) (default: gpu)")
+    parser.add_argument("--val-batch-size", type=int, default=None, help="Batch size for validation and testing (default: 2 * train batch size)")
+    parser.add_argument("--val-every-n-epochs", type=int, default=1, help="Frequency of running validation during training (default: 1)")
+    parser.add_argument("--persistent-workers", action="store_true", default=None, help="Keep DataLoader worker processes alive across epochs")
+    parser.add_argument("--no-persistent-workers", action="store_true", default=None, help="Explicitly disable persistent DataLoader worker processes")
     parser.add_argument(
         "--job-arguments",
         default="",
@@ -324,10 +338,26 @@ def job_arguments(args, config):
             pieces.append(f"--add-epochs {args.add_epochs}")
         if args.save_every_n_epochs is not None and "--save-every-n-epochs" not in args.job_arguments:
             pieces.append(f"--save-every-n-epochs {args.save_every_n_epochs}")
+        if args.accumulate_grad_batches is not None and "--accumulate-grad-batches" not in args.job_arguments:
+            pieces.append(f"--accumulate-grad-batches {args.accumulate_grad_batches}")
+        if args.chunk_cache_size is not None and "--chunk-cache-size" not in args.job_arguments:
+            pieces.append(f"--chunk-cache-size {args.chunk_cache_size}")
         if args.num_workers is not None and "--num-workers" not in args.job_arguments:
             pieces.append(f"--num-workers {args.num_workers}")
-        elif "--num-workers" not in args.job_arguments:
-            pieces.append("--num-workers 3")
+        if args.pin_memory and "--pin-memory" not in args.job_arguments:
+            pieces.append("--pin-memory")
+        if args.no_pin_memory and "--no-pin-memory" not in args.job_arguments:
+            pieces.append("--no-pin-memory")
+        if args.negative_sampler and "--negative-sampler" not in args.job_arguments:
+            pieces.append(f"--negative-sampler {args.negative_sampler}")
+        if args.val_batch_size is not None and "--val-batch-size" not in args.job_arguments:
+            pieces.append(f"--val-batch-size {args.val_batch_size}")
+        if args.val_every_n_epochs != 1 and "--val-every-n-epochs" not in args.job_arguments:
+            pieces.append(f"--val-every-n-epochs {args.val_every_n_epochs}")
+        if args.persistent_workers and "--persistent-workers" not in args.job_arguments:
+            pieces.append("--persistent-workers")
+        if args.no_persistent_workers and "--no-persistent-workers" not in args.job_arguments:
+            pieces.append("--no-persistent-workers")
     elif args.stage == "score":
         pieces = [f"--config {args.config}", f"--files-per-job {args.files_per_job}"]
         if args.run_name and "--run-name" not in args.job_arguments:
@@ -446,6 +476,15 @@ def main():
                 print(f"Generated resubmission JDL: {resubmit_jdl}")
                 print(f"Run to resubmit failed shards: condor_submit {resubmit_jdl}")
         return
+    req_cpus = args.request_cpus if args.request_cpus is not None else 1
+    if args.stage == "train" and args.num_workers is not None and args.request_cpus == 1 and args.num_workers > 1:
+        req_cpus = args.num_workers
+
+    if args.stage == "train":
+        pers_str = "False" if args.no_persistent_workers else ("True" if args.persistent_workers else "auto (True when num_workers > 0)")
+        pin_str = "False" if args.no_pin_memory else ("True" if args.pin_memory else "auto (True on CUDA)")
+        val_bs_str = str(args.val_batch_size) if args.val_batch_size is not None else "auto (2x train batch size)"
+        print(f"Pipeline options: negative_sampler={args.negative_sampler}, num_workers={args.num_workers}, val_batch_size={val_bs_str}, val_every_n_epochs={args.val_every_n_epochs}, persistent_workers={pers_str}, pin_memory={pin_str}, chunk_cache_size={args.chunk_cache_size}")
 
     proxy_path = resolve_and_prepare_proxy(args.proxy)
     if args.log_dir.startswith("/tmp"):
@@ -511,9 +550,9 @@ def main():
         ("TARBALL", tarball),
         ("X509_PROXY", proxy_path),
         ("LOG_DIR", args.log_dir),
-        ("REQUEST_CPUS", str(request_cpus)),
-        ("REQUEST_MEMORY", request_memory),
-        ("REQUEST_DISK", request_disk),
+        ("REQUEST_CPUS", str(req_cpus)),
+        ("REQUEST_MEMORY", args.request_memory),
+        ("REQUEST_DISK", args.request_disk),
         ("GPU_REQUIREMENT", gpu_requirement),
         ("JOB_FLAVOUR", args.job_flavour),
         ("ENVIRONMENT_SETTING", env_setting),
@@ -529,7 +568,13 @@ def main():
     print(f"Wrote {submit_path}")
     print(f"Submit it with: condor_submit {submit_path}")
     if not args.dry_run:
-        subprocess.run(["condor_submit", submit_path], check=True)
+        try:
+
+            subprocess.run(["condor_submit", submit_path], check=True)
+        except OSError as error:
+            if error.errno !=8:
+                raise
+            subprocess.run(["bash", shutil.which("condor_submit"), submit_path], check=True)    
     else:
         print("[dry-run] JDL generated successfully. Condor submission skipped.")
 

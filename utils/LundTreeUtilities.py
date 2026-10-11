@@ -1,4 +1,6 @@
 from collections import deque
+import resource
+import time
 
 import numpy as np
 import torch
@@ -53,37 +55,50 @@ def compute_normalization_stats(loader, n_features, verbose=False):
     are ready for ``OnTheFlyNormalizer(["x"], means, stds)``.
     """
     feature_sum = torch.zeros(n_features, dtype=torch.float64)
+    feature_sq_sum = torch.zeros(n_features, dtype=torch.float64)
     total_node_weight = torch.tensor(0.0, dtype=torch.float64)
+    t_data_total = 0.0
+    t_compute_total = 0.0
+    t_prev = time.perf_counter()
+    pbar = tqdm(loader, desc="Computing training normalization stats", disable=not verbose)
 
-    for batch in tqdm(
-        loader, desc="Computing training means", disable=not verbose
-    ):
+    for batch_idx, batch in enumerate(pbar):
+        t_data_total += time.perf_counter() - t_prev
+        t0 = time.perf_counter()
         node_weights = _node_weights(batch)
         features = batch.x.to(torch.float64)
-        feature_sum += (features * node_weights[:, None]).sum(dim=0)
+        weighted_features = features * node_weights[:, None]
+        feature_sum += weighted_features.sum(dim=0)
+        feature_sq_sum += (weighted_features * features).sum(dim=0)
         total_node_weight += node_weights.sum()
+        t_compute_total += time.perf_counter() - t0
+        if verbose and (batch_idx + 1) % 25 == 0:
+            avg_io = t_data_total / (batch_idx + 1)
+            avg_comp = t_compute_total / (batch_idx + 1)
+            pbar.set_postfix_str(f"I/O: {avg_io:.2f}s, Math: {avg_comp:.2f}s")
+        t_prev = time.perf_counter()
 
     if total_node_weight <= 0:
-        raise ValueError(
-            "Total node weight is not positive; cannot compute normalization"
-        )
+        raise ValueError("Total node weight is not positive; cannot compute normalization")
     means = feature_sum / total_node_weight
-
-    variance_sum = torch.zeros_like(means)
-    for batch in tqdm(
-        loader,
-        desc="Computing training standard deviations",
-        disable=not verbose,
-    ):
-        node_weights = _node_weights(batch)
-        features = batch.x.to(torch.float64)
-        variance_sum += (
-            (features - means).square() * node_weights[:, None]
-        ).sum(dim=0)
-
-    stds = torch.sqrt(variance_sum / total_node_weight)
-    # A constant feature would otherwise divide by zero.
+    variance = torch.clamp((feature_sq_sum / total_node_weight) - means.square(), min=0.0)
+    stds = torch.sqrt(variance)
     stds[stds == 0] = 1.0
+
+    if verbose:
+        try:
+            import psutil
+            proc = psutil.Process()
+            cpu_pct = proc.cpu_percent()
+            rss_mb = proc.memory_info().rss / (1024**2)
+        except Exception:
+            cpu_pct = 0.0
+            rss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        tot_time = t_data_total + t_compute_total
+        pct_io = (t_data_total / tot_time * 100) if tot_time > 0 else 0
+        pct_comp = (t_compute_total / tot_time * 100) if tot_time > 0 else 0
+        print(f"[Diagnostics] Normalization Stats: Data I/O: {t_data_total:.1f}s ({pct_io:.1f}%), Math: {t_compute_total:.1f}s ({pct_comp:.1f}%) | CPU RSS: {rss_mb:.1f} MiB, CPU: {cpu_pct:.1f}%")
+
     return means.float(), stds.float()
 
 # Define binary tree structure for Lund decomposition

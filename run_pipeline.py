@@ -162,6 +162,9 @@ def parse_arguments():
         default=False,
         help="Explicitly disable Comet ML tracking",
     )
+    parser.add_argument("--comet-experiment-key", default=None, help="Explicit Comet experiment key to resume")
+    parser.add_argument("--new-comet-experiment", action="store_true", default=False, help="Force creating a new Comet experiment even when resuming training")
+    parser.add_argument("--chunk-cache-size", "--gae-chunk-cache-size", dest="chunk_cache_size", type=int, default=None, help="In-memory chunk cache size override for training")
     parser.add_argument(
         "--checkpoint",
         default=None,
@@ -205,6 +208,13 @@ def parse_arguments():
         default=None,
         help="Number of worker processes for multiprocessing stages",
     )
+    parser.add_argument("--pin-memory", action="store_true", default=None, help="Enable pinned host memory for DataLoader")
+    parser.add_argument("--no-pin-memory", action="store_true", default=None, help="Explicitly disable pinned host memory")
+    parser.add_argument("--negative-sampler", choices=["gpu", "cpu"], default="gpu", help="Negative edge sampler: 'gpu' (fast vectorized GPU sampler) or 'cpu' (legacy PyG sampler) (default: gpu)")
+    parser.add_argument("--val-batch-size", type=int, default=None, help="Batch size for validation and testing (default: 2 * train batch size)")
+    parser.add_argument("--val-every-n-epochs", type=int, default=1, help="Frequency of running validation during training (default: 1)")
+    parser.add_argument("--persistent-workers", action="store_true", default=None, help="Keep DataLoader worker processes alive across epochs")
+    parser.add_argument("--no-persistent-workers", action="store_true", default=None, help="Explicitly disable persistent DataLoader worker processes")
     parser.add_argument(
         "--quiet",
         action="store_true",
@@ -249,6 +259,10 @@ def main():
     device = resolve_device(args.device)
     print(f"Pipeline initialized with steps: {steps_to_run}")
     print(f"Device: {device}")
+    pers_str = "False" if args.no_persistent_workers else ("True" if args.persistent_workers else "auto (True when num_workers > 0)")
+    pin_str = "False" if args.no_pin_memory else ("True" if args.pin_memory else "auto (True on CUDA)")
+    val_bs_str = str(args.val_batch_size) if args.val_batch_size is not None else "auto (2x train batch size)"
+    print(f"Pipeline options: negative_sampler={args.negative_sampler}, num_workers={args.num_workers}, val_batch_size={val_bs_str}, val_every_n_epochs={args.val_every_n_epochs}, persistent_workers={pers_str}, pin_memory={pin_str}, chunk_cache_size={args.chunk_cache_size}")
 
     # Resolve config-driven paths and active seed
     active_seed = args.seed if args.seed is not None else config.training.get("seed")
@@ -326,6 +340,28 @@ def main():
             train_cmd.append("--comet")
         if args.no_comet:
             train_cmd.append("--no-comet")
+        if args.comet_experiment_key:
+            train_cmd.extend(["--comet-experiment-key", args.comet_experiment_key])
+        if args.new_comet_experiment:
+            train_cmd.append("--new-comet-experiment")
+        if args.chunk_cache_size is not None:
+            train_cmd.extend(["--chunk-cache-size", str(args.chunk_cache_size)])
+        if args.num_workers is not None:
+            train_cmd.extend(["--num-workers", str(args.num_workers)])
+        if args.pin_memory:
+            train_cmd.append("--pin-memory")
+        if args.no_pin_memory:
+            train_cmd.append("--no-pin-memory")
+        if args.negative_sampler:
+            train_cmd.extend(["--negative-sampler", args.negative_sampler])
+        if args.val_batch_size is not None:
+            train_cmd.extend(["--val-batch-size", str(args.val_batch_size)])
+        if args.val_every_n_epochs != 1:
+            train_cmd.extend(["--val-every-n-epochs", str(args.val_every_n_epochs)])
+        if args.persistent_workers:
+            train_cmd.append("--persistent-workers")
+        if args.no_persistent_workers:
+            train_cmd.append("--no-persistent-workers")
         if args.quiet:
             train_cmd.append("--quiet")
         run_stage(train_cmd, "train")
