@@ -35,6 +35,7 @@ from utils.InputJson import dataset_of, sum_initial_events
 
 
 _GRAPH_WORKER_PRODUCER = None
+_CHUNK_CACHE = collections.OrderedDict()
 
 
 def _initialize_graph_worker(producer):
@@ -230,12 +231,11 @@ class JetGraphProducer(Dataset):
         self.chunk_size = self.graphs_per_chunk
         self.processing_batch_size = self.event_batch_size
         cache_env = os.environ.get("GAE_CHUNK_CACHE_SIZE")
-        self._n_cached_chunks = int(cache_env) if cache_env else (50 if n_cached_chunks == 2 else n_cached_chunks)
+        self._n_cached_chunks = int(cache_env) if cache_env else n_cached_chunks
         self.validate_cache_config = validate_cache_config
         self.num_workers = int(num_workers)
         self.worker_prefetch = int(worker_prefetch)
-        # OrderedDict used as a bounded LRU cache: key = chunk index, value = list of graphs
-        self._chunk_cache: collections.OrderedDict = collections.OrderedDict()
+        self._chunk_cache = _CHUNK_CACHE
 
         assert self.weights in ["xsec", None], "Only xsec and None are supported for the weights argument (more to be added later)"
         if self.num_workers < 1:
@@ -718,26 +718,23 @@ class JetGraphProducer(Dataset):
         """
         chunk_idx = idx // self.graphs_per_chunk
         pos = idx % self.graphs_per_chunk
+        chunk_path = os.path.join(self.processed_dir, f"{self.output_dataset_name}_chunk_{chunk_idx}.pt")
 
-        if chunk_idx not in self._chunk_cache:
-            chunk_path = os.path.join(
-                self.processed_dir,
-                f"{self.output_dataset_name}_chunk_{chunk_idx}.pt",
-            )
+        if chunk_path not in _CHUNK_CACHE:
             chunk = torch.load(chunk_path, map_location="cpu", weights_only=False)
             # Evict the oldest entry when the cache is full
-            if len(self._chunk_cache) >= self._n_cached_chunks:
-                self._chunk_cache.popitem(last=False)
-            self._chunk_cache[chunk_idx] = chunk
+            if len(_CHUNK_CACHE) >= self._n_cached_chunks:
+                _CHUNK_CACHE.popitem(last=False)
+            _CHUNK_CACHE[chunk_path] = chunk
         else:
             # Move to the end to mark as most-recently used
-            self._chunk_cache.move_to_end(chunk_idx)
+            _CHUNK_CACHE.move_to_end(chunk_path)
 
         # Return a clone so that in-place transforms applied by __getitem__
         # (e.g. OnTheFlyNormalizer) do not corrupt the cached graph objects.
         # Without this, the second access of the same graph would receive an
         # already-transformed tensor and produce inf/nan values.
-        return self._chunk_cache[chunk_idx][pos].clone()
+        return _CHUNK_CACHE[chunk_path][pos].clone()
 
     def process(self):
         # Stream graphs from every input file and write them to disk in
