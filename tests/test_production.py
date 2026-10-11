@@ -34,7 +34,9 @@ def write_fixture(root):
             "PFCands_mass": [0.14, 0.0, 0.105, 0.14, 0.0005, 0.0],
         })
     with uproot.recreate(root / "fixture.root") as output:
-        output["Events"] = ak.Array(events)
+        output["Events"] = {
+            key: ak.Array([e[key] for e in events]) for key in events[0]
+        }
 
 
 class ProductionTests(unittest.TestCase):
@@ -410,6 +412,28 @@ class ProductionTests(unittest.TestCase):
             [(chunk.entry_start, chunk.entry_stop) for chunk in chunks],
             [(0, 3), (3, 4)],
         )
+
+    def test_shard_pre_transform_and_pre_filter_files(self):
+        # Produce shard 0
+        self.producer("test_sample_shard0")
+        processed_dir = self.root / "processed"
+        self.assertTrue((processed_dir / "test_sample_shard0_pre_transform.pt").exists())
+        self.assertTrue((processed_dir / "test_sample_shard0_pre_filter.pt").exists())
+        self.assertTrue((processed_dir / "pre_transform.pt").exists())
+        self.assertTrue((processed_dir / "pre_filter.pt").exists())
+
+        # Produce shard 1 in the same directory without conflicts
+        self.producer("test_sample_shard1")
+        self.assertTrue((processed_dir / "test_sample_shard1_pre_transform.pt").exists())
+        self.assertTrue((processed_dir / "test_sample_shard1_pre_filter.pt").exists())
+
+        # Reloading shard 0 shouldn't trigger warnings
+        reloaded = self.producer("test_sample_shard0")
+        self.assertEqual(len(reloaded), 8)
+
+        # Reloading shard 0 with different pre_transform should warn
+        with self.assertWarnsRegex(UserWarning, "pre_transform.*differs"):
+            self.producer("test_sample_shard0", pre_transform=lambda g: g, validate_cache_config=False)
 
 
 if __name__ == "__main__":

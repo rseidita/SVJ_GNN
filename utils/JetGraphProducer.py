@@ -1,11 +1,23 @@
 import collections
 import concurrent.futures
+import hashlib
 import multiprocessing
 import os
 import pickle
+import re
+import sys
+import warnings
+import numpy as np
 import uproot
 import torch
 from torch_geometric.data import Dataset, Data
+try:
+    from torch_geometric.data.dataset import _repr, files_exist
+except ImportError:
+    def _repr(obj):
+        return 'None' if obj is None else re.sub(r'(<.*?)\s.*(>)', r'\1\2', str(obj))
+    def files_exist(files):
+        return len(files) != 0 and all(os.path.exists(f) for f in files)
 from tqdm import tqdm
 import logging
 from utils.GraphBuilder import (
@@ -13,9 +25,17 @@ from utils.GraphBuilder import (
     build_pfnano_jet_graph,
     pfnano_branches,
 )
+from utils.Cuts import (
+    cut_branches,
+    cuts_fingerprint,
+    event_cut_mask,
+    jet_cut_mask,
+)
+from utils.InputJson import dataset_of, sum_initial_events
 
 
 _GRAPH_WORKER_PRODUCER = None
+_CHUNK_CACHE = collections.OrderedDict()
 
 
 def _initialize_graph_worker(producer):
@@ -151,7 +171,10 @@ class JetGraphProducer(Dataset):
         chunk_size=None,
         processing_batch_size=None,
         worker_prefetch=2,
+        multiprocessing_start_method=None,
     ):
+
+        self.multiprocessing_start_method = multiprocessing_start_method
 
         self.root = root
         self.n_store_jets = n_store_jets
@@ -207,12 +230,12 @@ class JetGraphProducer(Dataset):
         # Compatibility aliases for external code.
         self.chunk_size = self.graphs_per_chunk
         self.processing_batch_size = self.event_batch_size
-        self._n_cached_chunks = n_cached_chunks
+        cache_env = os.environ.get("GAE_CHUNK_CACHE_SIZE")
+        self._n_cached_chunks = int(cache_env) if cache_env else n_cached_chunks
         self.validate_cache_config = validate_cache_config
         self.num_workers = int(num_workers)
         self.worker_prefetch = int(worker_prefetch)
-        # OrderedDict used as a bounded LRU cache: key = chunk index, value = list of graphs
-        self._chunk_cache: collections.OrderedDict = collections.OrderedDict()
+        self._chunk_cache = _CHUNK_CACHE
 
         assert self.weights in ["xsec", None], "Only xsec and None are supported for the weights argument (more to be added later)"
         if self.num_workers < 1:
@@ -250,7 +273,7 @@ class JetGraphProducer(Dataset):
         # Load lightweight metadata from disk (weights, jet indices, total count).
         # No graph tensors are loaded here — those are fetched on-demand in get().
         meta_path = os.path.join(self.processed_dir, f"{self.output_dataset_name}_meta.pt")
-        meta = torch.load(meta_path, weights_only=False)
+        meta = torch.load(meta_path, map_location="cpu", weights_only=False)
         if self.validate_cache_config:
             self._validate_processing_config(meta, meta_path)
         # The on-disk layout must always come from metadata. This is
@@ -695,26 +718,23 @@ class JetGraphProducer(Dataset):
         """
         chunk_idx = idx // self.graphs_per_chunk
         pos = idx % self.graphs_per_chunk
+        chunk_path = os.path.join(self.processed_dir, f"{self.output_dataset_name}_chunk_{chunk_idx}.pt")
 
-        if chunk_idx not in self._chunk_cache:
-            chunk_path = os.path.join(
-                self.processed_dir,
-                f"{self.output_dataset_name}_chunk_{chunk_idx}.pt",
-            )
-            chunk = torch.load(chunk_path, weights_only=False)
+        if chunk_path not in _CHUNK_CACHE:
+            chunk = torch.load(chunk_path, map_location="cpu", weights_only=False)
             # Evict the oldest entry when the cache is full
-            if len(self._chunk_cache) >= self._n_cached_chunks:
-                self._chunk_cache.popitem(last=False)
-            self._chunk_cache[chunk_idx] = chunk
+            if len(_CHUNK_CACHE) >= self._n_cached_chunks:
+                _CHUNK_CACHE.popitem(last=False)
+            _CHUNK_CACHE[chunk_path] = chunk
         else:
             # Move to the end to mark as most-recently used
-            self._chunk_cache.move_to_end(chunk_idx)
+            _CHUNK_CACHE.move_to_end(chunk_path)
 
         # Return a clone so that in-place transforms applied by __getitem__
         # (e.g. OnTheFlyNormalizer) do not corrupt the cached graph objects.
         # Without this, the second access of the same graph would receive an
         # already-transformed tensor and produce inf/nan values.
-        return self._chunk_cache[chunk_idx][pos].clone()
+        return _CHUNK_CACHE[chunk_path][pos].clone()
 
     def process(self):
         # Stream graphs from every input file and write them to disk in
@@ -756,13 +776,13 @@ class JetGraphProducer(Dataset):
         if self.num_workers == 1:
             _consume_files()
         else:
-            # ``fork`` avoids requiring user scripts to be guarded by
-            # ``if __name__ == "__main__"`` and shares imported/JIT state
-            # copy-on-write. Fall back to the platform default where absent.
-            start_methods = multiprocessing.get_all_start_methods()
-            context = multiprocessing.get_context(
-                "fork" if "fork" in start_methods else None
-            )
+            method = self.multiprocessing_start_method
+            if method is None:
+                # Do not fork after PyTorch/ROOT has initialized threads.
+                # Forking in a multi-threaded process causes deadlocks.
+                start_methods = multiprocessing.get_all_start_methods()
+                method = "spawn" if "spawn" in start_methods else None
+            context = multiprocessing.get_context(method)
             with concurrent.futures.ProcessPoolExecutor(
                 max_workers=self.num_workers,
                 mp_context=context,
@@ -793,3 +813,227 @@ class JetGraphProducer(Dataset):
             meta,
             os.path.join(self.processed_dir, f"{self.output_dataset_name}_meta.pt"),
         )
+
+    @property
+    def pre_transform_file(self) -> str:
+        """Path to the shard-specific pre_transform marker file."""
+        return os.path.join(self.processed_dir, f"{self.output_dataset_name}_pre_transform.pt")
+
+    @property
+    def pre_filter_file(self) -> str:
+        """Path to the shard-specific pre_filter marker file."""
+        return os.path.join(self.processed_dir, f"{self.output_dataset_name}_pre_filter.pt")
+
+    def _process(self):
+        """Process graphs and save transform/filter markers with shard names to prevent write collisions."""
+        for file_path, legacy_name, current_val, name in [
+            (self.pre_transform_file, "pre_transform.pt", self.pre_transform, "pre_transform"),
+            (self.pre_filter_file, "pre_filter.pt", self.pre_filter, "pre_filter"),
+        ]:
+            check_path = file_path if os.path.exists(file_path) else os.path.join(self.processed_dir, legacy_name)
+            if os.path.exists(check_path):
+                try:
+                    saved_val = torch.load(check_path, map_location="cpu", weights_only=False)
+                    if saved_val != _repr(current_val):
+                        warnings.warn(
+                            f"The `{name}` argument differs from the one used in "
+                            "the pre-processed version of this dataset. If you want to "
+                            "make use of another pre-processing technique, pass "
+                            "`force_reload=True` explicitly to reload the dataset."
+                        )
+                except Exception:
+                    pass
+
+        if not getattr(self, "force_reload", False) and files_exist(self.processed_paths):
+            return
+
+        if getattr(self, "log", True) and "pytest" not in sys.modules:
+            print("Processing...", file=sys.stderr)
+
+        os.makedirs(self.processed_dir, exist_ok=True)
+        self.process()
+
+        torch.save(_repr(self.pre_transform), self.pre_transform_file)
+        torch.save(_repr(self.pre_filter), self.pre_filter_file)
+
+        for legacy_name, obj in [
+            ("pre_transform.pt", self.pre_transform),
+            ("pre_filter.pt", self.pre_filter),
+        ]:
+            legacy_path = os.path.join(self.processed_dir, legacy_name)
+            try:
+                if not os.path.exists(legacy_path):
+                    torch.save(_repr(obj), legacy_path)
+            except OSError:
+                pass
+
+        if getattr(self, "log", True) and "pytest" not in sys.modules:
+            print("Done!", file=sys.stderr)
+
+
+class FileListGraphProducer(JetGraphProducer):
+    """Produce graphs from an explicit list of ROOT files, with selections.
+
+    Differs from :class:`JetGraphProducer` in three ways:
+
+    - the input files are given explicitly (typically read from the JSON in
+      ``inputJson/``) instead of every ``.root`` file inside ``root``.
+      ``root`` is therefore only the output location of the ``processed/``
+      directory, which makes it straightforward to give each condor or crab
+      shard its own output area;
+    - the selections in :mod:`utils.Cuts` are applied to every event and jet
+      according to the sample's ``role`` and ``year``;
+    - with ``weights="xsec"`` the number of generated events is summed over
+      the files of the dataset a file belongs to (``dataset_groups``), not
+      over every input file, so several datasets can share one sample. The
+      sums are cached so each file is opened once for this purpose.
+
+    ``save_jet_idx`` is forced on because the jet index is needed to evaluate
+    the per-jet selection, and the cut branches are appended to
+    ``extra_obs_to_load`` so the cut variables are read from the file.
+
+    Args:
+        root (str): Output directory for the processed dataset.
+        output_dataset_name (str): Name of the processed output dataset.
+        file_paths (list): ROOT paths to process.
+        role (str): ``"signal"``, ``"background"`` or ``"data"``.
+        year (str): Data-taking year the sample corresponds to.
+        dataset_groups (dict): ``{dataset: [files]}`` covering
+            ``file_paths``. Defaults to a single group holding every file.
+
+    All remaining arguments are passed through to :class:`JetGraphProducer`.
+    """
+
+    def __init__(
+        self,
+        root,
+        output_dataset_name,
+        file_paths,
+        role,
+        year,
+        dataset_groups=None,
+        **kwargs,
+    ):
+        self._file_paths = [str(path) for path in file_paths]
+        if not self._file_paths:
+            raise ValueError("No input ROOT files were provided")
+        self.role = role
+        self.year = str(year)
+        self.region = kwargs.pop("region", "control")
+        if dataset_groups is None:
+            dataset_groups = {output_dataset_name: list(self._file_paths)}
+        self.dataset_groups = {
+            name: [str(path) for path in files]
+            for name, files in dataset_groups.items()
+        }
+        self._initial_events_cache = {}
+        self._current_file = None
+
+        # The jet index identifies which jet a graph came from, which the
+        # per-jet selection needs.
+        kwargs["save_jet_idx"] = True
+        extra_obs_to_load = list(kwargs.pop("extra_obs_to_load", None) or [])
+        for branch in cut_branches(self.role, self.year, region=self.region):
+            if branch not in extra_obs_to_load:
+                extra_obs_to_load.append(branch)
+        kwargs["extra_obs_to_load"] = extra_obs_to_load
+
+        os.makedirs(root, exist_ok=True)
+        super().__init__(root, output_dataset_name, **kwargs)
+
+    @property
+    def raw_file_names(self):
+        return list(self._file_paths)
+
+    def _processing_config(self):
+        config = super()._processing_config()
+        config["role"] = self.role
+        config["year"] = self.year
+        config["region"] = self.region
+        config["cuts_fingerprint"] = cuts_fingerprint()
+        config["cut_branches"] = sorted(
+            cut_branches(self.role, self.year, region=self.region)
+        )
+        config["input_files_sha256"] = hashlib.sha256(
+            "\n".join(self._file_paths).encode()
+        ).hexdigest()
+        return config
+
+    def get_graphs(self, file_name):
+        self._current_file = str(file_name)
+        return super().get_graphs(file_name)
+
+    def _iter_graphs_from_file(self, file_name, executor=None):
+        # Remember which file is being read so get_total_initial_events can
+        # look up the dataset it belongs to.
+        self._current_file = str(file_name)
+        yield from super()._iter_graphs_from_file(file_name, executor)
+
+    def get_total_initial_events(self):
+        """Generated events of the dataset the current file belongs to."""
+        dataset = dataset_of(self._current_file, self.dataset_groups)
+        if dataset not in self._initial_events_cache:
+            if self.verbose:
+                print(f"Summing initial events for dataset '{dataset}'")
+            self._initial_events_cache[dataset] = sum_initial_events(
+                self.dataset_groups[dataset]
+            )
+        return self._initial_events_cache[dataset]
+
+    def process_event(
+        self,
+        i_start,
+        i_stop,
+        events,
+        xsec,
+        gen_events_before_selection,
+        total_events,
+        events_to_process,
+        show_progress=None,
+    ):
+        """Apply the shared selections, then build graphs for what survives."""
+        events_in_range = events[i_start:i_stop]
+        mask = np.asarray(
+            event_cut_mask(
+                events_in_range, self.role, self.year, region=self.region
+            ),
+            dtype=bool,
+        )
+        if mask.shape != (len(events_in_range),):
+            raise ValueError(
+                "event_cut_mask must return one boolean per event, got shape "
+                f"{mask.shape} for {len(events_in_range)} events"
+            )
+
+        surviving = np.flatnonzero(mask)
+        if not len(surviving):
+            return []
+
+        selected_events = events_in_range[mask]
+        config = self._graph_build_config()
+        graphs = []
+
+        # One event at a time, so that the jet selection can be evaluated
+        # against the event a graph came from.
+        for position, entry_offset in enumerate(surviving):
+            event_graphs = super().process_event(
+                position,
+                position + 1,
+                selected_events,
+                xsec,
+                gen_events_before_selection,
+                total_events,
+                events_to_process,
+                show_progress=False,
+            )
+            for graph in event_graphs:
+                jet_index = int(graph.jet_idx[0])
+                if not jet_cut_mask(selected_events[position], jet_index, config):
+                    continue
+                if self.save_event_number:
+                    graph.event_number = torch.tensor(
+                        [i_start + int(entry_offset)], dtype=torch.long
+                    )
+                graphs.append(graph)
+
+        return graphs

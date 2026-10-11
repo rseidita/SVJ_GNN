@@ -1,0 +1,130 @@
+{
+  "graph": {
+    "jet_collection": "FatJet",
+    "n_store_jets": 2,
+    "use_lund_decomp": true,
+    "n_lund_vars": 5,
+    "save_energy_fractions": true,
+    "save_4vectors_in_lund_tree": true,
+    "use_displacement": false,
+    "kt_cut": null
+  },
+  "production": {
+    "output_dir": "data_aimar",
+    "graphs_per_chunk": 10000,
+    "event_batch_size": 1000,
+    "num_workers": 4,
+    "worker_prefetch": 2
+  },
+  "training": {
+    "output_dir": "training_aimar",
+    "seed": null,
+    "epochs": 200,
+    "batch_size": 512,
+    "learning_rate": 0.001,
+    "alpha": 0.2,
+    "split_seed": 12345,
+    "sampling": "weighted",
+    "train_window": [0.0, 0.7],
+    "validation_window": [0.7, 0.85],
+    "test_window": [0.85, 1.0],
+    "comet_project": "svj-gae"
+  },
+  "scoring": {
+    "output_dir": "output_scores_aimar",
+    "region": "signal_region"
+  },
+  "plotting": {
+    "plots_dir": "plots_aimar"
+  },
+  "model": {
+    "spec": "GraphAEBatchNorm.GraphAEBatchNorm",
+    "kwargs": {
+      "architecture": [115, 170, 200, 115],
+      "dropout": 0.1
+    }
+  },
+  "samples": {
+    "smoke": {
+      "role": "data",
+      "year": "2018",
+      "input_json": "inputJson/smoke/2018_data.json",
+      "weights": null,
+      "label": 0
+    },
+    "data_2017": {
+      "role": "data",
+      "year": "2017",
+      "input_json": "inputJson/data/2017_data.json",
+      "weights": null,
+      "label": 0
+    },
+    "data_2018": {
+      "role": "data",
+      "year": "2018",
+      "input_json": "inputJson/data/2018_data.json",
+      "weights": null,
+      "label": 0
+    },
+    "background_2017": {
+      "role": "background",
+      "year": "2017",
+      "input_json": "inputJson/background/2017_background.json",
+      "weights": "xsec",
+      "label": 0
+    },
+    "background_2018": {
+      "role": "background",
+      "year": "2018",
+      "input_json": "inputJson/background/2018_background.json",
+      "weights": "xsec",
+      "label": 0
+    },
+    "qcd_2017": {
+      "role": "background",
+      "year": "2017",
+      "input_json": "inputJson/background/2017_background.json",
+      "datasets": [
+        "QCD_HT300to500",
+        "QCD_HT500to700",
+        "QCD_HT700to1000",
+        "QCD_HT1000to1500",
+        "QCD_HT1500to2000",
+        "QCD_HT2000toInf"
+      ],
+      "weights": "xsec",
+      "label": 0
+    },
+    "qcd_2018": {
+      "role": "background",
+      "year": "2018",
+      "input_json": "inputJson/background/2018_background.json",
+      "datasets": [
+        "QCD_HT300to500",
+        "QCD_HT500to700",
+        "QCD_HT700to1000",
+        "QCD_HT1000to1500",
+        "QCD_HT1500to2000",
+        "QCD_HT2000toInf"
+      ],
+      "weights": "xsec",
+      "label": 0
+    },
+    "signal_2017": {
+      "role": "signal",
+      "year": "2017",
+      "input_json": "inputJson/signal/2017_signal.json",
+      "per_dataset": true,
+      "weights": "xsec",
+      "label": 1
+    },
+    "signal_2018": {
+      "role": "signal",
+      "year": "2018",
+      "input_json": "inputJson/signal/2018_signal.json",
+      "per_dataset": true,
+      "weights": "xsec",
+      "label": 1
+    }
+  }
+}

@@ -1,0 +1,5 @@
+# Extra dependencies for the GAE pipeline, on top of requirements.txt.
+# The LCG_108_cuda view sourced by ../init.sh already provides numpy, awkward,
+# uproot, numba, torch, torch-geometric, vector, tqdm, networkx, matplotlib,
+# mplhep, ROOT and pyarrow. Only comet-ml is missing there.
+comet-ml

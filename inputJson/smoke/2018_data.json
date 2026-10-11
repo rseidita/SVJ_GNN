@@ -1,0 +1,10 @@
+{
+  "year": "2018",
+  "type": "data",
+  "base": "../",
+  "datasets": {
+    "Run2018A_part14": [
+      "root://cmsdcache-kit-disk.gridka.de:1094//store/user/mgaisdor/SVJScouting_skims_v2_noResiduals/2018/s_channel_scouting_pre_selection/nominal/Run2018A/part-0.root"
+    ]
+  }
+}

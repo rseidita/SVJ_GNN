@@ -108,7 +108,7 @@ class GraphBuilderTests(unittest.TestCase):
                 "PFCands_mass": [0.14, 0.0],
             }])
             with uproot.recreate(file_name) as output:
-                output["Events"] = event
+                output["Events"] = {field: event[field] for field in event.fields}
             with uproot.open(f"{file_name}:Events") as tree:
                 loaded_event = tree.arrays(library="ak")[0]
 
