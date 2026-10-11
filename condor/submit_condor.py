@@ -98,9 +98,10 @@ def parse_arguments():
     parser.add_argument("--files-per-job", type=int, default=5)
     parser.add_argument("--submit-dir", default=os.path.join(CONDOR_DIR, "submit"))
     parser.add_argument("--log-dir", default=os.path.join(CONDOR_DIR, "logs"), help="Directory for job stdout/stderr/log (default: condor/logs)")
-    parser.add_argument("--request-cpus", type=int, default=1)
-    parser.add_argument("--request-memory", default="8 GB")
-    parser.add_argument("--request-disk", default="4 GB")
+    parser.add_argument("--request-cpus", type=int, default=None, help="CPUs to request (defaults to 4 for GPU train, else 1)")
+    parser.add_argument("--request-memory", default=None, help="Memory to request (defaults to 16 GB for GPU train, else 8 GB)")
+    parser.add_argument("--request-disk", default=None, help="Disk to request (defaults to 10 GB for GPU train, else 4 GB)")
+    parser.add_argument("--num-workers", type=int, default=None, help="DataLoader worker processes for training stage (defaults to 3 for GPU train)")
     parser.add_argument(
         "--request-gpus",
         type=int,
@@ -200,6 +201,13 @@ def parse_arguments():
     )
     parser.add_argument("--skip-tarball", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="Generate submit JDL and tarball without calling condor_submit")
+    parser.add_argument(
+        "--verify",
+        "--check",
+        action="store_true",
+        dest="verify",
+        help="Verify produced shards on EOS/disk instead of submitting jobs (stage produce)",
+    )
     return parser.parse_args()
 
 
@@ -316,6 +324,10 @@ def job_arguments(args, config):
             pieces.append(f"--add-epochs {args.add_epochs}")
         if args.save_every_n_epochs is not None and "--save-every-n-epochs" not in args.job_arguments:
             pieces.append(f"--save-every-n-epochs {args.save_every_n_epochs}")
+        if args.num_workers is not None and "--num-workers" not in args.job_arguments:
+            pieces.append(f"--num-workers {args.num_workers}")
+        elif "--num-workers" not in args.job_arguments:
+            pieces.append("--num-workers 3")
     elif args.stage == "score":
         pieces = [f"--config {args.config}", f"--files-per-job {args.files_per_job}"]
         if args.run_name and "--run-name" not in args.job_arguments:
@@ -388,6 +400,53 @@ def main():
     args = parse_arguments()
     config = load_config(os.path.join(SVJ_GNN_DIR, args.config))
 
+    if args.verify:
+        if args.stage != "produce":
+            raise ValueError("--verify is currently supported for --stage produce")
+        from utils.shard_verifier import count_expected_shards_from_json, generate_resubmit_jdl, verify_sample_shards
+        base_dir = args.eos_dir if args.output_location == "eos" else "."
+        prod_dir = config.production.get("output_dir", "data")
+        selected_samples = [s.name for s in config.select(args.samples)]
+        all_failed_items = []
+
+        print("\n" + "=" * 80)
+        print("VERIFYING PRODUCED SHARDS")
+        print("=" * 80)
+        for s_name in selected_samples:
+            sample_cfg = config.samples.get(s_name)
+            input_json_path = os.path.join(SVJ_GNN_DIR, sample_cfg.input_json)
+            n_expected, total_f = count_expected_shards_from_json(input_json_path, args.files_per_job)
+            processed_dir = os.path.join(base_dir, prod_dir, s_name, "processed")
+            print(f"\nChecking sample '{s_name}' ({n_expected} expected shards from {total_f} input files)...")
+            res = verify_sample_shards(processed_dir, s_name, n_expected, num_workers=32)
+            ok_cnt = len(res["ok_shards"])
+            corrupt_cnt = len(res["corrupted_shards"])
+            inc_cnt = len(res["incomplete_shards"])
+            miss_cnt = len(res["missing_shards"])
+            print(f"  [✓] Verified OK: {ok_cnt}/{n_expected} ({ok_cnt/n_expected*100:.1f}%)")
+            if corrupt_cnt:
+                print(f"  [✗] Corrupted:   {corrupt_cnt} shard(s): {list(res['corrupted_shards'].keys())}")
+            if inc_cnt:
+                print(f"  [!] Incomplete:  {inc_cnt} shard(s): {[x[0] for x in res['incomplete_shards']]}")
+            if miss_cnt:
+                print(f"  [?] Missing:     {miss_cnt} shard(s): {res['missing_shards']}")
+            failed = sorted(set(res["missing_shards"] + [x[0] for x in res["incomplete_shards"]] + list(res["corrupted_shards"].keys())))
+            for fid in failed:
+                all_failed_items.append((s_name, fid))
+
+        print("\n" + "=" * 80)
+        if not all_failed_items:
+            print("All shards across all checked samples are intact and verified! 🎉")
+        else:
+            print(f"Found {len(all_failed_items)} failed shard(s) across {len(selected_samples)} sample(s).")
+            resubmit_jdl = os.path.join(args.submit_dir, "produce_resubmit.jdl")
+            template_jdl = os.path.join(CONDOR_DIR, "submit", "produce.jdl")
+            if os.path.exists(template_jdl):
+                generate_resubmit_jdl(template_jdl, all_failed_items, resubmit_jdl, stage="produce")
+                print(f"Generated resubmission JDL: {resubmit_jdl}")
+                print(f"Run to resubmit failed shards: condor_submit {resubmit_jdl}")
+        return
+
     proxy_path = resolve_and_prepare_proxy(args.proxy)
     if args.log_dir.startswith("/tmp"):
         print(f"WARNING: --log-dir '{args.log_dir}' is in local /tmp. On CERN lxplus, HTCondor access points and worker nodes cannot access local /tmp across machines. Output and log files will fail to transfer. Use an AFS path instead.")
@@ -405,6 +464,22 @@ def main():
 
     num_gpus = args.request_gpus if args.request_gpus is not None else (1 if args.stage == "train" else 0)
     min_gpu_mem = args.min_gpu_memory
+
+    if args.request_cpus is not None:
+        request_cpus = args.request_cpus
+    else:
+        request_cpus = 4 if (args.stage == "train" and num_gpus > 0) else 1
+
+    if args.request_memory is not None:
+        request_memory = args.request_memory
+    else:
+        request_memory = "16 GB" if (args.stage == "train" and num_gpus > 0) else "8 GB"
+
+    if args.request_disk is not None:
+        request_disk = args.request_disk
+    else:
+        request_disk = "10 GB" if (args.stage == "train" and num_gpus > 0) else "4 GB"
+
     gpu_requirement = (
         f"request_gpus           = {num_gpus}\n"
         # f"requirements            = (TARGET.GPUs_Capability >= 7.0)"
@@ -420,6 +495,8 @@ def main():
     api_key = os.environ.get("COMET_API_KEY", "8pkRGAjV7ZfkZfIKjdQQPCQuT")
     if api_key:
         env_vars.append(f"COMET_API_KEY={api_key}")
+    env_vars.append(f"OMP_NUM_THREADS={request_cpus}")
+    env_vars.append("GAE_CHUNK_CACHE_SIZE=2")
 
     env_setting = (
         f'Environment             = "{" ".join(env_vars)}"'
@@ -434,9 +511,9 @@ def main():
         ("TARBALL", tarball),
         ("X509_PROXY", proxy_path),
         ("LOG_DIR", args.log_dir),
-        ("REQUEST_CPUS", str(args.request_cpus)),
-        ("REQUEST_MEMORY", args.request_memory),
-        ("REQUEST_DISK", args.request_disk),
+        ("REQUEST_CPUS", str(request_cpus)),
+        ("REQUEST_MEMORY", request_memory),
+        ("REQUEST_DISK", request_disk),
         ("GPU_REQUIREMENT", gpu_requirement),
         ("JOB_FLAVOUR", args.job_flavour),
         ("ENVIRONMENT_SETTING", env_setting),
